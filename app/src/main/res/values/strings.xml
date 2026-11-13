@@ -12,7 +12,12 @@
     <string name="auth_invalid_credentials_hint">Enter a valid email and a password of at least 6 characters.</string>
     <string name="supabase_auth_ready">Connected to Supabase Backend</string>
     <string name="supabase_config_missing">Set SUPABASE_URL &amp; SUPABASE_PUBLISHABLE_KEY in Secrets to enable cloud sync</string>
-    <string name="sign_in_google">Continue with Google</string>
+    <string name="sign_in_google">Continue with Gmail</string>
+    <string name="gmail_auth_hint">Sign in or create your creator account in one tap using your Gmail account.</string>
+    <string name="auth_or_email_toggle">Or sign in with Email &amp; Password</string>
+    <string name="auth_hide_email_toggle">Hide Email &amp; Password form</string>
+    <string name="gmail_client_id_missing">Set SUPABASE_GOOGLE_WEB_CLIENT_ID in Secrets to activate direct Gmail sign-in.</string>
+    <string name="supabase_keys_required_error">Set SUPABASE_URL &amp; SUPABASE_PUBLISHABLE_KEY in Secrets to connect to the database.</string>
     <string name="auth_signing_in">Signing in…</string>
     <string name="auth_cancelled">Sign-in was cancelled. Tap to try again.</string>
 

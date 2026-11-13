@@ -35,6 +35,7 @@ class ExampleRobolectricTest {
         assertEquals("VYORA", appName)
         assertTrue(context.getString(R.string.supabase_ledger_title).contains("Supabase"))
         assertTrue(context.getString(R.string.supabase_auth_ready).contains("Supabase"))
+        assertTrue(context.getString(R.string.sign_in_google).contains("Gmail"))
         assertTrue(context.getString(R.string.save_apk_button).contains("APK"))
     }
 
@@ -49,6 +50,7 @@ class ExampleRobolectricTest {
         val arRes = context.createConfigurationContext(config).resources
         assertTrue(arRes.getString(R.string.supabase_ledger_title).contains("Supabase"))
         assertTrue(arRes.getString(R.string.supabase_auth_ready).contains("Supabase"))
+        assertTrue(arRes.getString(R.string.sign_in_google).contains("Gmail"))
         assertTrue(arRes.getString(R.string.save_apk_button).contains("APK"))
     }
 

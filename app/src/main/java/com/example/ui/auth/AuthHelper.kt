@@ -49,8 +49,13 @@ fun onGoogleSignInClicked(
     onAuthCancelled: () -> Unit,
     scope: CoroutineScope
 ) {
+    val supabase = SupabaseClient.getInstance(context)
+    if (!supabase.isConfigured) {
+        onAuthError(context.getString(com.example.R.string.supabase_keys_required_error))
+        return
+    }
     if (!isGoogleSignInConfigured()) {
-        onAuthError("Google Sign-In requires SUPABASE_GOOGLE_WEB_CLIENT_ID in AI Studio Secrets.")
+        onAuthError(context.getString(com.example.R.string.gmail_client_id_missing))
         return
     }
     val clientId = BuildConfig.SUPABASE_GOOGLE_WEB_CLIENT_ID.trim()
@@ -60,7 +65,6 @@ fun onGoogleSignInClicked(
         .addCredentialOption(signInOption)
         .build()
 
-    val supabase = SupabaseClient.getInstance(context)
     scope.launch {
         try {
             val activityContext = (context as? Activity) ?: context

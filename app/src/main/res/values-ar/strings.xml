@@ -12,7 +12,12 @@
     <string name="auth_invalid_credentials_hint">أدخل بريداً إلكترونياً صحيحاً وكلمة مرور من 6 أحرف على الأقل.</string>
     <string name="supabase_auth_ready">متصل بخادم Supabase</string>
     <string name="supabase_config_missing">أضف SUPABASE_URL و SUPABASE_PUBLISHABLE_KEY في Secrets لتفعيل المزامنة السحابية</string>
-    <string name="sign_in_google">المتابعة بحساب Google</string>
+    <string name="sign_in_google">تسجيل الدخول عبر Gmail</string>
+    <string name="gmail_auth_hint">سجّل دخولك أو أنشئ حسابك فوراً بضغطة واحدة باستخدام حساب Gmail الخاص بك.</string>
+    <string name="auth_or_email_toggle">أو الدخول بالبريد الإلكتروني وكلمة المرور</string>
+    <string name="auth_hide_email_toggle">إخفاء الدخول بالبريد الإلكتروني</string>
+    <string name="gmail_client_id_missing">أضف SUPABASE_GOOGLE_WEB_CLIENT_ID في Secrets لتفعيل تسجيل الدخول المباشر عبر Gmail.</string>
+    <string name="supabase_keys_required_error">يرجى ضبط SUPABASE_URL و SUPABASE_PUBLISHABLE_KEY في Secrets للاتصال بقاعدة البيانات.</string>
     <string name="auth_signing_in">جاري تسجيل الدخول…</string>
     <string name="auth_cancelled">تم إلغاء تسجيل الدخول. اضغط للمحاولة مجدداً.</string>
 
