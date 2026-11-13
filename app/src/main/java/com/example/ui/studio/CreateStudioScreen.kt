@@ -634,7 +634,8 @@ private fun VideoPublishEditor(
             }
 
             Button(
-                onClick = { onPublish(caption) },
+                uonClick = { viewModel.uploadAndPublishVideo(context = context, videoUri = selectedVideoUri!!, caption = caption, durationSec = elapsedSec, hashtags = hashtags, soundId = selectedSound?.id, soundTitle = selectedSound?.title, thumbnailUrl = coverUrl.toString(), videoUrl = selectedVideoUri.toString()) }.
+
                 enabled = uploadState !is UploadStatus.Progress,
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier
