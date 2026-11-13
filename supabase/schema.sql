@@ -1246,3 +1246,14 @@ CREATE POLICY "Authenticated delete own vyora-media"
     ON storage.objects FOR DELETE
     TO authenticated
     USING (bucket_id = 'vyora-media' AND (storage.foldername(name))[2] = auth.uid()::text);
+
+-- ============================================================================
+-- Schema Permissions & PostgREST Cache Reload
+-- ============================================================================
+
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated, service_role;
+GRANT SELECT ON public.vyora_videos_ledger, public.vyora_video_comments, public.vyora_sounds, public.vyora_hashtags, public.vyora_admin_settings TO anon;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;
+
+NOTIFY pgrst, 'reload schema';

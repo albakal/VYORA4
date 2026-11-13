@@ -64,6 +64,7 @@ jobs:
               printf 'SUPABASE_GOOGLE_WEB_CLIENT_ID=%s\n' "$SUPABASE_GOOGLE_WEB_CLIENT_ID"
             fi
           } > .env
+          echo "Supabase config flags -> URL:$([ -n "$SUPABASE_URL" ] && echo SET || echo MISSING) KEY:$([ -n "$SUPABASE_PUBLISHABLE_KEY" ] && echo SET || echo MISSING) GOOGLE_WEB_CLIENT_ID:$([ -n "$SUPABASE_GOOGLE_WEB_CLIENT_ID" ] && echo SET || echo MISSING)"
 
       - name: Prepare signing keystore & build APK
         env:
@@ -74,6 +75,7 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > my-upload-key.jks
+            keytool -list -v -keystore my-upload-key.jks -storepass "$STORE_PASSWORD" | grep -E "SHA1:|SHA256:" || true
             gradle :app:assembleRelease --no-daemon
             cp app/build/outputs/apk/release/app-release.apk VYORA.apk
           else
@@ -94,6 +96,7 @@ jobs:
                   -dname "CN=Android Debug,O=Android,C=US"
               fi
             fi
+            keytool -list -v -keystore debug.keystore -storepass android | grep -E "SHA1:|SHA256:" || true
             gradle :app:assembleDebug --no-daemon
             cp app/build/outputs/apk/debug/app-debug.apk VYORA.apk
           fi

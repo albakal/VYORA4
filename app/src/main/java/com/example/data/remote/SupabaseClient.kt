@@ -225,12 +225,18 @@ class SupabaseClient private constructor(
         }.onFailure { if (it is CancellationException) throw it }
     }
 
-    suspend fun signInWithGoogleIdToken(idToken: String): Result<SupabaseUser> = withContext(Dispatchers.IO) {
+    suspend fun signInWithGoogleIdToken(
+        idToken: String,
+        rawNonce: String? = null
+    ): Result<SupabaseUser> = withContext(Dispatchers.IO) {
         runCatching {
             requireConfigured()
             val bodyJson = JSONObject().apply {
                 put("provider", "google")
                 put("id_token", idToken)
+                if (!rawNonce.isNullOrBlank()) {
+                    put("nonce", rawNonce)
+                }
             }
             val req = Request.Builder()
                 .url("$baseUrl/auth/v1/token?grant_type=id_token")

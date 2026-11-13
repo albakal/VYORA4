@@ -100,6 +100,7 @@ fun LiveLobbyScreen(
     val streams by viewModel.activeLiveStreams.collectAsStateWithLifecycle()
     var showStartDialog by remember { mutableStateOf(false) }
     var streamTitle by remember { mutableStateOf("") }
+    var isStartingLive by remember { mutableStateOf(false) }
 
     var hasPermissions by remember {
         mutableStateOf(
@@ -109,7 +110,11 @@ fun LiveLobbyScreen(
     }
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
         hasPermissions = res[Manifest.permission.CAMERA] == true && res[Manifest.permission.RECORD_AUDIO] == true
-        if (hasPermissions) showStartDialog = true
+        if (hasPermissions) {
+            showStartDialog = true
+        } else {
+            viewModel.showToast(context.getString(R.string.permission_camera_audio))
+        }
     }
 
     Scaffold(
@@ -207,32 +212,53 @@ fun LiveLobbyScreen(
 
     if (showStartDialog) {
         AlertDialog(
-            onDismissRequest = { showStartDialog = false },
+            onDismissRequest = { if (!isStartingLive) showStartDialog = false },
             title = { Text(vString(R.string.start_live_btn)) },
             text = {
                 OutlinedTextField(
                     value = streamTitle,
                     onValueChange = { streamTitle = it },
                     label = { Text(vString(R.string.live_title_hint)) },
+                    enabled = !isStartingLive,
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("live_title_input")
                 )
             },
             confirmButton = {
-                Button(onClick = {
-                    showStartDialog = false
-                    scope.launch {
-                        val created = viewModel.startLiveStream(streamTitle)
-                        if (created != null) {
-                            onEnterStream(created.id, true)
+                Button(
+                    enabled = !isStartingLive,
+                    modifier = Modifier.testTag("confirm_start_live_btn"),
+                    onClick = {
+                        isStartingLive = true
+                        scope.launch {
+                            val created = viewModel.startLiveStream(streamTitle)
+                            isStartingLive = false
+                            if (created != null) {
+                                showStartDialog = false
+                                streamTitle = ""
+                                onEnterStream(created.id, true)
+                            }
                         }
                     }
-                }) {
+                ) {
+                    if (isStartingLive) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
                     Text(vString(R.string.start_live_btn))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showStartDialog = false }) {
+                TextButton(
+                    enabled = !isStartingLive,
+                    onClick = { showStartDialog = false }
+                ) {
                     Text(vString(R.string.dismiss))
                 }
             }

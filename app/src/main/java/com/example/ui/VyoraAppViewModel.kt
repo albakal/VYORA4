@@ -248,6 +248,23 @@ class VyoraAppViewModel(
         _toastMessage.value = null
     }
 
+    private fun resolveCurrentProfile(): UserProfile? {
+        currentUserProfile.value?.let { return it }
+        val authUser = supabaseClient.currentUser ?: return null
+        val fallbackUsername = authUser.email.substringBefore("@")
+            .lowercase()
+            .replace(Regex("[^a-z0-9_]"), "_")
+            .trim('_')
+            .ifBlank { "creator_${authUser.uid.take(6)}" }
+        return UserProfile(
+            id = authUser.uid,
+            userId = authUser.uid,
+            username = fallbackUsername,
+            displayName = authUser.displayName.ifBlank { fallbackUsername },
+            avatarUrl = authUser.avatarUrl
+        )
+    }
+
     fun showToast(msg: String) {
         _toastMessage.value = msg
     }
@@ -264,7 +281,7 @@ class VyoraAppViewModel(
     suspend fun isVideoLiked(videoId: String): Boolean = videoRepo.isVideoLikedByMe(videoId)
 
     fun toggleLike(video: VideoPost) {
-        val actor = currentUserProfile.value ?: return
+        val actor = resolveCurrentProfile() ?: return
         viewModelScope.launch {
             videoRepo.toggleLike(video, actor).onFailure {
                 _toastMessage.value = it.localizedMessage
@@ -292,14 +309,14 @@ class VyoraAppViewModel(
     }
 
     fun recordShare(video: VideoPost) {
-        val actor = currentUserProfile.value ?: return
+        val actor = resolveCurrentProfile() ?: return
         viewModelScope.launch {
             videoRepo.recordShare(video, actor)
         }
     }
 
     fun addComment(video: VideoPost, text: String) {
-        val actor = currentUserProfile.value ?: return
+        val actor = resolveCurrentProfile() ?: return
         viewModelScope.launch {
             videoRepo.addComment(video, actor, text).onFailure {
                 _toastMessage.value = it.localizedMessage
@@ -308,7 +325,7 @@ class VyoraAppViewModel(
     }
 
     fun followOrUnfollow(targetUser: UserProfile) {
-        val actor = currentUserProfile.value ?: return
+        val actor = resolveCurrentProfile() ?: return
         val currentlyFollowing = targetUser.userId in followingIds.value
         viewModelScope.launch {
             if (currentlyFollowing) {
@@ -326,7 +343,7 @@ class VyoraAppViewModel(
     }
 
     fun respondToFollowRequest(request: FollowRequest, accept: Boolean) {
-        val me = currentUserProfile.value ?: return
+        val me = resolveCurrentProfile() ?: return
         viewModelScope.launch {
             userRepo.respondToFollowRequest(request, me, accept).onFailure {
                 _toastMessage.value = it.localizedMessage
@@ -353,7 +370,10 @@ class VyoraAppViewModel(
         durationSec: Long,
         onPublished: () -> Unit
     ) {
-        val creator = currentUserProfile.value ?: return
+        val creator = resolveCurrentProfile() ?: run {
+            _toastMessage.value = "Please sign in first."
+            return
+        }
         viewModelScope.launch {
             storageRepo.uploadVideoWithThumbnail(context, currentUserId, videoUri, customCoverUri)
                 .collect { status ->
@@ -440,7 +460,7 @@ class VyoraAppViewModel(
         mediaUri: Uri? = null,
         audioDurationMs: Long = 0L
     ) {
-        val actor = currentUserProfile.value ?: return
+        val actor = resolveCurrentProfile() ?: return
         viewModelScope.launch {
             var mediaUrl = ""
             if (mediaUri != null) {
@@ -476,9 +496,21 @@ class VyoraAppViewModel(
     }
 
     suspend fun startLiveStream(title: String): LiveStream? {
-        val host = currentUserProfile.value ?: return null
+        val host = resolveCurrentProfile() ?: run {
+            _toastMessage.value = "Please sign in first."
+            return null
+        }
+        val authUser = supabaseClient.currentUser
+        if (currentUserProfile.value == null && authUser != null) {
+            userRepo.ensureUserProfile(
+                uid = authUser.uid,
+                email = authUser.email,
+                displayName = authUser.displayName,
+                avatarUrl = authUser.avatarUrl
+            )
+        }
         return liveRepo.startStream(host, title).onFailure {
-            _toastMessage.value = it.localizedMessage
+            _toastMessage.value = it.localizedMessage ?: "Failed to start live broadcast"
         }.getOrNull()
     }
 
@@ -501,7 +533,7 @@ class VyoraAppViewModel(
     }
 
     fun sendLiveComment(streamId: String, text: String) {
-        val actor = currentUserProfile.value ?: return
+        val actor = resolveCurrentProfile() ?: return
         viewModelScope.launch {
             liveRepo.sendLiveComment(streamId, actor, text)
         }

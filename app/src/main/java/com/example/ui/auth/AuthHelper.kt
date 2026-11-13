@@ -19,6 +19,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.security.MessageDigest
+import java.util.UUID
 
 fun isGoogleSignInConfigured(): Boolean =
     BuildConfig.SUPABASE_GOOGLE_WEB_CLIENT_ID.trim().isNotBlank() &&
@@ -59,8 +61,14 @@ fun onGoogleSignInClicked(
         return
     }
     val clientId = BuildConfig.SUPABASE_GOOGLE_WEB_CLIENT_ID.trim()
+    val rawNonce = UUID.randomUUID().toString()
+    val hashedNonce = MessageDigest.getInstance("SHA-256")
+        .digest(rawNonce.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
 
-    val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+    val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId)
+        .setNonce(hashedNonce)
+        .build()
     val request = GetCredentialRequest.Builder()
         .addCredentialOption(signInOption)
         .build()
@@ -72,7 +80,7 @@ fun onGoogleSignInClicked(
             val credential = result.credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                supabase.signInWithGoogleIdToken(googleIdToken)
+                supabase.signInWithGoogleIdToken(googleIdToken, rawNonce)
                     .onSuccess { onAuthSuccess() }
                     .onFailure { e -> onAuthError(e.localizedMessage ?: "Supabase sign-in failed") }
             } else {

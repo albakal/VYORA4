@@ -25,7 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -79,7 +78,6 @@ import androidx.credentials.CredentialManager
 import com.example.R
 import com.example.data.remote.SupabaseClient
 import com.example.ui.components.ApkExportControls
-import com.example.ui.theme.AmberGold
 import com.example.ui.theme.ElectricViolet
 import com.example.ui.theme.EmeraldLive
 import com.example.ui.theme.NeonCyan
@@ -109,8 +107,6 @@ fun AuthScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var infoMessage by remember { mutableStateOf<String?>(null) }
     var apkStatusMessage by remember { mutableStateOf<String?>(null) }
-
-    val supabaseConfigured = supabase.isConfigured
 
     Box(
         modifier = Modifier
@@ -192,43 +188,6 @@ fun AuthScreen(
                 color = MaterialTheme.colorScheme.secondary,
                 textAlign = TextAlign.Center
             )
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Supabase Connection Status Chip
-            Surface(
-                color = if (supabaseConfigured) {
-                    EmeraldLive.copy(alpha = 0.14f)
-                } else {
-                    AmberGold.copy(alpha = 0.16f)
-                },
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.CloudDone,
-                        contentDescription = null,
-                        tint = if (supabaseConfigured) EmeraldLive else AmberGold,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (supabaseConfigured) {
-                            vString(R.string.supabase_auth_ready)
-                        } else {
-                            vString(R.string.supabase_config_missing)
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (supabaseConfigured) EmeraldLive else AmberGold,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
 
             Spacer(modifier = Modifier.height(20.dp))
 
