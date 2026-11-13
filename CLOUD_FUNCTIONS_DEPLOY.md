@@ -75,14 +75,14 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 5. الرفع على GitHub والحصول على رابط ويب مباشر لتحميل الـ APK
 
-نظراً لأن حجم ملف `app-debug.apk` يتجاوز حد GitHub المسموح به للملفات داخل الالتزامات المباشرة (100 ميجابايت)، تمت إضافة ملف بناء تلقائي:
+تم تجهيز ملف البناء التلقائي وملفات الإعدادات والتوقيع (`app/google-services.json` و`debug.keystore.base64`) داخل المشروع:
 ```
 .github/workflows/build-apk.yml
 ```
-1. ارفع المشروع إلى مستودعك عبر زر **Push to GitHub** في قائمة الإعدادات بـ Google AI Studio (أو عبر `git push`).
-2. سيعمل **GitHub Actions** تلقائياً على تجميع أحدث نسخة APK وإصدار **GitHub Release** عام.
+1. ارفع المشروع إلى مستودعك `https://github.com/albakal/VYORA4` عبر زر **Push to GitHub** في قائمة الإعدادات بـ Google AI Studio.
+2. سيعمل **GitHub Actions** تلقائياً على قبول تراخيص Android SDK وفك تشفير شهادة التوقيع وبناء `VYORA.apk` ثم نشره في **GitHub Releases** و**Artifacts**.
 3. رابط التحميل المباشر على الويب بعد اكتمال البناء سيكون:
-   `https://github.com/albakal/Tik-tok/releases/latest`
+   `https://github.com/albakal/VYORA4/releases/latest/download/VYORA.apk`
 
-> ⚠️ **ملاحظة أمنية**: لا تحفظ رمز GitHub (`ghp_...`) داخل ملفات المشروع، وإذا تمت مشاركة الرمز في المحادثة قم بإلغائه وتجديده من إعدادات GitHub فوراً.
+> **ملاحظة**: يدعم مسار البناء أيضاً إضافة `GOOGLE_SERVICES_JSON_BASE64` و`DEBUG_KEYSTORE_BASE64` (أو `KEYSTORE_BASE64` و`STORE_PASSWORD` و`KEY_PASSWORD` لتوقيع Release) في **GitHub Secrets** كخيار احتياطي.
 
