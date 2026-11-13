@@ -1,125 +1,106 @@
 package com.example.data.repository
 
 import android.content.Context
-import com.example.R
 import com.example.data.model.HashtagItem
 import com.example.data.model.SoundTrack
 import com.example.data.model.UserProfile
 import com.example.data.model.VideoComment
 import com.example.data.model.VideoPost
-import com.example.data.remote.OperationType
-import com.example.data.remote.handleFirestoreError
-import com.google.firebase.Firebase
-import com.google.firebase.Timestamp
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.DocumentSnapshot.ServerTimestampBehavior
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.snapshots
+import com.example.data.remote.SupabaseClient
+import com.example.data.remote.toHashtagItem
+import com.example.data.remote.toObjectList
+import com.example.data.remote.toSoundTrack
+import com.example.data.remote.toVideoComment
+import com.example.data.remote.toVideoPost
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.tasks.await
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.UUID
 
 class VideoRepository(
-    private val db: FirebaseFirestore
+    private val supabase: SupabaseClient
 ) {
-    constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        )
-    )
-
-    private val auth get() = Firebase.auth
+    constructor(context: Context) : this(SupabaseClient.getInstance(context))
 
     private fun requireUid(): String =
-        auth.currentUser?.uid ?: throw IllegalStateException("User must be signed in.")
+        supabase.currentUser?.uid ?: throw IllegalStateException("User must be signed in.")
 
     fun observeActiveVideos(): Flow<List<VideoPost>> =
-        db.collection("videos")
-            .whereEqualTo("status", "active")
-            .limit(60)
-            .snapshots()
-            .map { snap ->
-                snap.toObjects(VideoPost::class.java, ServerTimestampBehavior.ESTIMATE)
-                    .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
-            }
-            .catch { error ->
-                handleFirestoreError(error, OperationType.LIST, "videos", auth)
-                throw error
-            }
+        supabase.observeTopic("videos").map {
+            val arr = supabase.select(
+                "vyora_videos_ledger",
+                "status=eq.active&order=created_at.desc&limit=60"
+            )
+            arr.toObjectList().map { it.toVideoPost() }
+        }
 
     fun observeUserVideos(userId: String): Flow<List<VideoPost>> =
-        db.collection("videos")
-            .whereEqualTo("userId", userId)
-            .whereEqualTo("status", "active")
-            .snapshots()
-            .map { snap ->
-                snap.toObjects(VideoPost::class.java, ServerTimestampBehavior.ESTIMATE)
-                    .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
-            }
-            .catch { error ->
-                handleFirestoreError(error, OperationType.LIST, "videos?userId=$userId", auth)
-                throw error
-            }
+        supabase.observeTopic("videos").map {
+            runCatching {
+                val arr = supabase.select(
+                    "vyora_videos_ledger",
+                    "creator_uid=eq.${SupabaseClient.urlEncode(userId)}&status=eq.active&order=created_at.desc"
+                )
+                arr.toObjectList().map { it.toVideoPost() }
+            }.getOrDefault(emptyList())
+        }
 
     fun observeBookmarkedIds(userId: String): Flow<Set<String>> =
-        db.collection("users").document(userId).collection("bookmarks")
-            .snapshots()
-            .map { snap -> snap.documents.map { it.id }.toSet() }
-            .catch { error ->
-                handleFirestoreError(error, OperationType.LIST, "users/$userId/bookmarks", auth)
-                throw error
-            }
+        supabase.observeTopic("bookmarks").map {
+            runCatching {
+                val arr = supabase.select(
+                    "vyora_video_bookmarks",
+                    "select=video_id&user_id=eq.${SupabaseClient.urlEncode(userId)}"
+                )
+                arr.toObjectList().mapNotNull { it.optString("video_id").takeIf(String::isNotBlank) }.toSet()
+            }.getOrDefault(emptySet())
+        }
 
     fun observeComments(videoId: String): Flow<List<VideoComment>> =
-        db.collection("videos").document(videoId).collection("comments")
-            .whereEqualTo("videoId", videoId)
-            .snapshots()
-            .map { snap ->
-                snap.toObjects(VideoComment::class.java, ServerTimestampBehavior.ESTIMATE)
-                    .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
-            }
-            .catch { error ->
-                handleFirestoreError(error, OperationType.LIST, "videos/$videoId/comments", auth)
-                throw error
-            }
+        supabase.observeTopic("comments").map {
+            runCatching {
+                val arr = supabase.select(
+                    "vyora_video_comments",
+                    "video_id=eq.${SupabaseClient.urlEncode(videoId)}&order=created_at.desc"
+                )
+                arr.toObjectList().map { it.toVideoComment() }
+            }.getOrDefault(emptyList())
+        }
 
     fun observeSounds(): Flow<List<SoundTrack>> =
-        db.collection("sounds")
-            .whereEqualTo("isLicensed", true)
-            .snapshots()
-            .map { snap ->
-                snap.toObjects(SoundTrack::class.java, ServerTimestampBehavior.ESTIMATE)
-                    .sortedByDescending { it.usesCount }
-            }
-            .catch { error ->
-                handleFirestoreError(error, OperationType.LIST, "sounds", auth)
-                throw error
-            }
+        supabase.observeTopic("sounds").map {
+            runCatching {
+                val arr = supabase.select(
+                    "vyora_sounds",
+                    "is_licensed=eq.true&order=uses_count.desc"
+                )
+                arr.toObjectList().map { it.toSoundTrack() }
+            }.getOrDefault(emptyList())
+        }
 
     fun observeHashtags(): Flow<List<HashtagItem>> =
-        db.collection("hashtags")
-            .whereGreaterThanOrEqualTo("videosCount", 0L)
-            .limit(30)
-            .snapshots()
-            .map { snap ->
-                snap.toObjects(HashtagItem::class.java, ServerTimestampBehavior.ESTIMATE)
-                    .sortedByDescending { it.videosCount }
-            }
-            .catch { error ->
-                handleFirestoreError(error, OperationType.LIST, "hashtags", auth)
-                throw error
-            }
+        supabase.observeTopic("hashtags").map {
+            runCatching {
+                val arr = supabase.select(
+                    "vyora_hashtags",
+                    "videos_count=gte.0&order=videos_count.desc&limit=30"
+                )
+                arr.toObjectList().map { it.toHashtagItem() }
+            }.getOrDefault(emptyList())
+        }
 
     suspend fun isVideoLikedByMe(videoId: String): Boolean {
-        val uid = auth.currentUser?.uid ?: return false
-        return try {
-            db.collection("videos").document(videoId).collection("likes").document(uid).get().await().exists()
-        } catch (_: Exception) {
-            false
-        }
+        val uid = supabase.currentUser?.uid ?: return false
+        return runCatching {
+            val likeId = "${videoId}:${uid}"
+            val arr = supabase.select(
+                "vyora_video_likes",
+                "select=id&id=eq.${SupabaseClient.urlEncode(likeId)}&limit=1"
+            )
+            arr.length() > 0
+        }.getOrDefault(false)
     }
 
     suspend fun publishVideo(
@@ -131,7 +112,7 @@ class VideoRepository(
         soundTitle: String,
         durationSec: Long
     ): Result<String> = runCatching {
-        val uid = requireUid()
+        requireUid()
         val hashtags = Regex("#([\\p{L}0-9_]+)")
             .findAll(caption)
             .map { it.groupValues[1].lowercase() }
@@ -139,52 +120,21 @@ class VideoRepository(
             .take(15)
             .toList()
 
-        val docRef = db.collection("videos").document()
-        val payload = mapOf(
-            "userId" to uid,
-            "creatorUsername" to creator.username,
-            "creatorAvatarUrl" to creator.avatarUrl,
-            "videoUrl" to videoUrl,
-            "thumbnailUrl" to thumbnailUrl,
-            "caption" to caption.take(500),
-            "hashtags" to hashtags,
-            "soundId" to soundId,
-            "soundTitle" to soundTitle.ifBlank { "Original Sound - ${creator.username}" }.take(120),
-            "durationSec" to durationSec.coerceIn(1L, 300L),
-            "viewsCount" to 0L,
-            "likesCount" to 0L,
-            "commentsCount" to 0L,
-            "sharesCount" to 0L,
-            "bookmarksCount" to 0L,
-            "status" to "active",
-            "createdAt" to FieldValue.serverTimestamp(),
-            "updatedAt" to FieldValue.serverTimestamp()
-        )
-        docRef.set(payload).await()
-
-        // Update hashtag counts
-        for (tag in hashtags) {
-            val cleanId = tag.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(64).ifBlank { "tag" }
-            val tagRef = db.collection("hashtags").document(cleanId)
-            val existingTag = tagRef.get().await()
-            if (existingTag.exists()) {
-                tagRef.update(mapOf("videosCount" to FieldValue.increment(1), "updatedAt" to FieldValue.serverTimestamp())).await()
-            } else {
-                tagRef.set(mapOf("tag" to tag, "videosCount" to 1L, "updatedAt" to FieldValue.serverTimestamp())).await()
+        val videoId = supabase.rpc(
+            "vyora_publish_video",
+            JSONObject().apply {
+                put("p_video_url", videoUrl)
+                put("p_thumbnail_url", thumbnailUrl)
+                put("p_caption", caption.take(500))
+                put("p_hashtags", JSONArray(hashtags))
+                put("p_sound_id", soundId)
+                put("p_sound_title", soundTitle.ifBlank { "Original Sound - ${creator.username}" }.take(120))
+                put("p_duration_sec", durationSec.coerceIn(1L, 300L))
             }
-        }
-
-        if (soundId.isNotBlank()) {
-            val sndRef = db.collection("sounds").document(soundId)
-            if (sndRef.get().await().exists()) {
-                sndRef.update("usesCount", FieldValue.increment(1)).await()
-            }
-        }
-        docRef.id
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.CREATE, "videos", auth)
-    }
+        ).trim().trim('"')
+        supabase.notifyChange("videos", "hashtags", "sounds")
+        videoId
+    }.onFailure { if (it is CancellationException) throw it }
 
     suspend fun updateVideoCaption(videoId: String, caption: String): Result<Unit> = runCatching {
         requireUid()
@@ -194,200 +144,79 @@ class VideoRepository(
             .distinct()
             .take(15)
             .toList()
-        db.collection("videos").document(videoId).update(
-            mapOf(
-                "caption" to caption.take(500),
-                "hashtags" to hashtags,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-        ).await()
+        supabase.update(
+            "vyora_videos_ledger",
+            "video_id=eq.${SupabaseClient.urlEncode(videoId)}",
+            JSONObject().apply {
+                put("caption", caption.take(500))
+                put("hashtags", JSONArray(hashtags))
+            }
+        )
+        supabase.notifyChange("videos")
         Unit
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.UPDATE, "videos/$videoId", auth)
-    }
+    }.onFailure { if (it is CancellationException) throw it }
 
     suspend fun deleteVideo(videoId: String): Result<Unit> = runCatching {
         requireUid()
-        db.collection("videos").document(videoId).delete().await()
+        supabase.delete("vyora_videos_ledger", "video_id=eq.${SupabaseClient.urlEncode(videoId)}")
+        supabase.notifyChange("videos")
         Unit
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.DELETE, "videos/$videoId", auth)
-    }
+    }.onFailure { if (it is CancellationException) throw it }
 
     suspend fun toggleLike(video: VideoPost, actor: UserProfile): Result<Boolean> = runCatching {
-        val uid = requireUid()
-        val likeRef = db.collection("videos").document(video.id).collection("likes").document(uid)
-        val videoRef = db.collection("videos").document(video.id)
-        val ownerRef = db.collection("users").document(video.userId)
-        val alreadyLiked = likeRef.get().await().exists()
-
-        val batch = db.batch()
-        if (alreadyLiked) {
-            batch.delete(likeRef)
-            batch.update(videoRef, mapOf("likesCount" to FieldValue.increment(-1), "updatedAt" to FieldValue.serverTimestamp()))
-            batch.update(ownerRef, mapOf("likesCount" to FieldValue.increment(-1), "updatedAt" to FieldValue.serverTimestamp()))
-        } else {
-            batch.set(
-                likeRef,
-                mapOf(
-                    "userId" to uid,
-                    "targetId" to video.id,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            )
-            batch.update(videoRef, mapOf("likesCount" to FieldValue.increment(1), "updatedAt" to FieldValue.serverTimestamp()))
-            batch.update(ownerRef, mapOf("likesCount" to FieldValue.increment(1), "updatedAt" to FieldValue.serverTimestamp()))
-            if (video.userId != uid) {
-                batch.set(
-                    db.collection("notifications").document(),
-                    mapOf(
-                        "recipientId" to video.userId,
-                        "actorId" to uid,
-                        "actorUsername" to actor.username,
-                        "actorAvatarUrl" to actor.avatarUrl,
-                        "type" to "like",
-                        "targetId" to video.id,
-                        "message" to "@${actor.username} liked your video",
-                        "isRead" to false,
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }
-        }
-        batch.commit().await()
-        !alreadyLiked
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "videos/${video.id}/likes", auth)
-    }
+        requireUid()
+        val raw = supabase.rpc(
+            "vyora_toggle_like",
+            JSONObject().put("p_video_id", video.id)
+        ).trim()
+        supabase.notifyChange("videos", "profiles", "notifications")
+        raw == "true"
+    }.onFailure { if (it is CancellationException) throw it }
 
     suspend fun toggleBookmark(videoId: String): Result<Boolean> = runCatching {
-        val uid = requireUid()
-        val bmRef = db.collection("users").document(uid).collection("bookmarks").document(videoId)
-        val videoRef = db.collection("videos").document(videoId)
-        val exists = bmRef.get().await().exists()
-        val batch = db.batch()
-        if (exists) {
-            batch.delete(bmRef)
-            batch.update(videoRef, mapOf("bookmarksCount" to FieldValue.increment(-1), "updatedAt" to FieldValue.serverTimestamp()))
-        } else {
-            batch.set(
-                bmRef,
-                mapOf(
-                    "userId" to uid,
-                    "targetId" to videoId,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            )
-            batch.update(videoRef, mapOf("bookmarksCount" to FieldValue.increment(1), "updatedAt" to FieldValue.serverTimestamp()))
-        }
-        batch.commit().await()
-        !exists
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "users/${auth.currentUser?.uid}/bookmarks/$videoId", auth)
-    }
+        requireUid()
+        val raw = supabase.rpc(
+            "vyora_toggle_bookmark",
+            JSONObject().put("p_video_id", videoId)
+        ).trim()
+        supabase.notifyChange("bookmarks", "videos")
+        raw == "true"
+    }.onFailure { if (it is CancellationException) throw it }
 
     suspend fun recordViewIfNew(videoId: String): Result<Unit> = runCatching {
-        val uid = requireUid()
-        val viewRef = db.collection("videos").document(videoId).collection("views").document(uid)
-        if (!viewRef.get().await().exists()) {
-            val batch = db.batch()
-            batch.set(
-                viewRef,
-                mapOf(
-                    "userId" to uid,
-                    "targetId" to videoId,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            )
-            batch.update(
-                db.collection("videos").document(videoId),
-                mapOf("viewsCount" to FieldValue.increment(1), "updatedAt" to FieldValue.serverTimestamp())
-            )
-            batch.commit().await()
-        }
+        requireUid()
+        supabase.rpc(
+            "vyora_record_view_reward",
+            JSONObject().put("p_video_id", videoId)
+        )
+        supabase.notifyChange("videos", "wallet")
         Unit
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.WRITE, "videos/$videoId/views", auth)
-    }
+    }.onFailure { if (it is CancellationException) throw it }
 
     suspend fun addComment(video: VideoPost, actor: UserProfile, text: String): Result<Unit> = runCatching {
-        val uid = requireUid()
+        requireUid()
         val trimmed = text.trim()
         require(trimmed.isNotEmpty())
-        val commentRef = db.collection("videos").document(video.id).collection("comments").document()
-        val batch = db.batch()
-        batch.set(
-            commentRef,
-            mapOf(
-                "videoId" to video.id,
-                "userId" to uid,
-                "username" to actor.username,
-                "avatarUrl" to actor.avatarUrl,
-                "text" to trimmed.take(500),
-                "createdAt" to FieldValue.serverTimestamp()
-            )
+        supabase.rpc(
+            "vyora_add_comment",
+            JSONObject().apply {
+                put("p_video_id", video.id)
+                put("p_text", trimmed.take(500))
+            }
         )
-        batch.update(
-            db.collection("videos").document(video.id),
-            mapOf("commentsCount" to FieldValue.increment(1), "updatedAt" to FieldValue.serverTimestamp())
-        )
-        if (video.userId != uid) {
-            batch.set(
-                db.collection("notifications").document(),
-                mapOf(
-                    "recipientId" to video.userId,
-                    "actorId" to uid,
-                    "actorUsername" to actor.username,
-                    "actorAvatarUrl" to actor.avatarUrl,
-                    "type" to "comment",
-                    "targetId" to video.id,
-                    "message" to "@${actor.username}: ${trimmed.take(80)}",
-                    "isRead" to false,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            )
-        }
-        batch.commit().await()
+        supabase.notifyChange("comments", "videos", "notifications")
         Unit
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.CREATE, "videos/${video.id}/comments", auth)
-    }
+    }.onFailure { if (it is CancellationException) throw it }
 
     suspend fun recordShare(video: VideoPost, actor: UserProfile): Result<Unit> = runCatching {
-        val uid = requireUid()
-        val batch = db.batch()
-        batch.update(
-            db.collection("videos").document(video.id),
-            mapOf("sharesCount" to FieldValue.increment(1), "updatedAt" to FieldValue.serverTimestamp())
+        requireUid()
+        supabase.rpc(
+            "vyora_record_share",
+            JSONObject().put("p_video_id", video.id)
         )
-        if (video.userId != uid) {
-            batch.set(
-                db.collection("notifications").document(),
-                mapOf(
-                    "recipientId" to video.userId,
-                    "actorId" to uid,
-                    "actorUsername" to actor.username,
-                    "actorAvatarUrl" to actor.avatarUrl,
-                    "type" to "share",
-                    "targetId" to video.id,
-                    "message" to "@${actor.username} shared your video",
-                    "isRead" to false,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            )
-        }
-        batch.commit().await()
+        supabase.notifyChange("videos", "notifications")
         Unit
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.UPDATE, "videos/${video.id}", auth)
-    }
+    }.onFailure { if (it is CancellationException) throw it }
 
     suspend fun createSoundTrack(
         title: String,
@@ -397,23 +226,22 @@ class VideoRepository(
         isLicensed: Boolean
     ): Result<String> = runCatching {
         val uid = requireUid()
-        val ref = db.collection("sounds").document()
-        ref.set(
-            mapOf(
-                "title" to title.take(120),
-                "artist" to artist.take(100),
-                "audioUrl" to audioUrl.take(1500),
-                "coverUrl" to "",
-                "durationSec" to durationSec.coerceIn(1L, 300L),
-                "isLicensed" to isLicensed,
-                "creatorId" to uid,
-                "usesCount" to 0L,
-                "createdAt" to FieldValue.serverTimestamp()
-            )
-        ).await()
-        ref.id
-    }.onFailure { e ->
-        if (e is CancellationException) throw e
-        handleFirestoreError(e, OperationType.CREATE, "sounds", auth)
-    }
+        val soundId = UUID.randomUUID().toString().replace("-", "")
+        supabase.insert(
+            "vyora_sounds",
+            JSONObject().apply {
+                put("id", soundId)
+                put("title", title.take(120))
+                put("artist", artist.take(100))
+                put("audio_url", audioUrl.take(1500))
+                put("cover_url", "")
+                put("duration_sec", durationSec.coerceIn(1L, 300L))
+                put("is_licensed", isLicensed)
+                put("creator_id", uid)
+                put("uses_count", 0L)
+            }
+        )
+        supabase.notifyChange("sounds")
+        soundId
+    }.onFailure { if (it is CancellationException) throw it }
 }

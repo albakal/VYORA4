@@ -10,78 +10,32 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
-import com.example.R
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.example.BuildConfig
+import com.example.data.remote.SupabaseClient
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseUser
-import com.google.firebase.auth.GoogleAuthProvider
-import com.google.firebase.auth.auth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
-fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
-    val listener = FirebaseAuth.AuthStateListener { auth ->
-        trySend(auth.currentUser)
-    }
-    addAuthStateListener(listener)
-    awaitClose { removeAuthStateListener(listener) }
-}
+fun isGoogleSignInConfigured(): Boolean =
+    BuildConfig.SUPABASE_GOOGLE_WEB_CLIENT_ID.trim().isNotBlank() &&
+        !BuildConfig.SUPABASE_GOOGLE_WEB_CLIENT_ID.contains("YOUR_GOOGLE_WEB_CLIENT_ID")
 
-fun attemptAutoSignIn(
+fun restoreSupabaseSession(
     context: Context,
-    credentialManager: CredentialManager,
-    onAuthSuccess: () -> Unit,
-    onUnauthenticated: () -> Unit,
-    scope: CoroutineScope
+    scope: CoroutineScope,
+    onRestored: () -> Unit = {},
+    onUnauthenticated: () -> Unit = {}
 ) {
-    if (Firebase.auth.currentUser != null) {
-        onAuthSuccess()
-        return
-    }
-    val clientId = try {
-        context.getString(R.string.default_web_client_id)
-    } catch (_: Exception) {
-        onUnauthenticated()
-        return
-    }
-
-    val googleIdOption = GetGoogleIdOption.Builder()
-        .setFilterByAuthorizedAccounts(true)
-        .setServerClientId(clientId)
-        .setAutoSelectEnabled(true)
-        .build()
-
-    val request = GetCredentialRequest.Builder()
-        .addCredentialOption(googleIdOption)
-        .build()
-
+    val supabase = SupabaseClient.getInstance(context)
     scope.launch {
-        try {
-            val result = credentialManager.getCredential(context, request)
-            val credential = result.credential
-            if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-                Firebase.auth.signInWithCredential(authCredential).await()
-                onAuthSuccess()
-            } else {
-                onUnauthenticated()
-            }
-        } catch (_: NoCredentialException) {
-            onUnauthenticated()
-        } catch (_: GetCredentialException) {
-            onUnauthenticated()
-        } catch (_: Exception) {
+        val user = supabase.restoreSession()
+        if (user != null) {
+            onRestored()
+        } else {
             onUnauthenticated()
         }
     }
@@ -95,18 +49,18 @@ fun onGoogleSignInClicked(
     onAuthCancelled: () -> Unit,
     scope: CoroutineScope
 ) {
-    val clientId = try {
-        context.getString(R.string.default_web_client_id)
-    } catch (_: Exception) {
-        onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
+    if (!isGoogleSignInConfigured()) {
+        onAuthError("Google Sign-In requires SUPABASE_GOOGLE_WEB_CLIENT_ID in AI Studio Secrets.")
         return
     }
+    val clientId = BuildConfig.SUPABASE_GOOGLE_WEB_CLIENT_ID.trim()
 
     val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
     val request = GetCredentialRequest.Builder()
         .addCredentialOption(signInOption)
         .build()
 
+    val supabase = SupabaseClient.getInstance(context)
     scope.launch {
         try {
             val activityContext = (context as? Activity) ?: context
@@ -114,18 +68,18 @@ fun onGoogleSignInClicked(
             val credential = result.credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-                Firebase.auth.signInWithCredential(authCredential).await()
-                onAuthSuccess()
+                supabase.signInWithGoogleIdToken(googleIdToken)
+                    .onSuccess { onAuthSuccess() }
+                    .onFailure { e -> onAuthError(e.localizedMessage ?: "Supabase sign-in failed") }
             } else {
                 onAuthError("Unexpected credential type")
             }
         } catch (e: GetCredentialCancellationException) {
-            Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
+            Log.w("Auth", "Google Sign-In cancelled: ${e.message}", e)
             onAuthCancelled()
         } catch (e: NoCredentialException) {
-            Log.w("Auth", "No Google credentials available on device: ${e.message}", e)
-            onAuthError("No Google account found on this device. Please sign in to a Google account in device settings.")
+            Log.w("Auth", "No Google credentials available: ${e.message}", e)
+            onAuthError("No Google account found on this device.")
         } catch (e: GetCredentialException) {
             Log.e("Auth", "Credential Manager error", e)
             onAuthError(e.localizedMessage ?: "Sign in failed")
@@ -148,7 +102,7 @@ fun signOutVyora(
             } catch (e: Exception) {
                 Log.w("Auth", "Failed to clear credential state: ${e.message}")
             } finally {
-                Firebase.auth.signOut()
+                SupabaseClient.currentInstanceOrNull()?.signOut()
                 onSignOutComplete()
             }
         }

@@ -175,6 +175,8 @@ fun HomeFeedScreen(
                     icon = Icons.Filled.Refresh,
                     title = "Connection Error",
                     subtitle = state.message,
+                    actionLabel = vString(R.string.sync_now),
+                    onAction = { viewModel.retryFeed() },
                     modifier = Modifier.align(Alignment.Center)
                 )
             }

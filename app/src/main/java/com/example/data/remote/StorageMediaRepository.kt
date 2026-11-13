@@ -4,14 +4,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import com.google.firebase.Firebase
-import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.storage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.util.UUID
@@ -23,94 +19,106 @@ sealed interface UploadStatus {
 }
 
 class StorageMediaRepository(
-    private val storage: FirebaseStorage = Firebase.storage
+    private val appContext: Context,
+    private val supabase: SupabaseClient = SupabaseClient.getInstance(appContext)
 ) {
     fun uploadVideoWithThumbnail(
         context: Context,
         userId: String,
         videoUri: Uri,
         customCoverUri: Uri? = null
-    ): Flow<UploadStatus> = callbackFlow {
+    ): Flow<UploadStatus> = flow {
         val fileId = UUID.randomUUID().toString()
-        val videoRef = storage.reference.child("videos/$userId/$fileId.mp4")
-        val thumbRef = storage.reference.child("thumbnails/$userId/$fileId.jpg")
+        emit(UploadStatus.Progress(10))
 
-        val uploadTask = videoRef.putFile(videoUri)
-        uploadTask.addOnProgressListener { snapshot ->
-            val total = snapshot.totalByteCount
-            if (total > 0) {
-                val pct = ((100.0 * snapshot.bytesTransferred) / total).toInt().coerceIn(0, 95)
-                trySend(UploadStatus.Progress(pct))
-            }
-        }.addOnSuccessListener {
-            videoRef.downloadUrl.addOnSuccessListener { videoDownloadUri ->
-                // Upload thumbnail in background
-                trySend(UploadStatus.Progress(97))
-                if (customCoverUri != null) {
-                    thumbRef.putFile(customCoverUri).addOnSuccessListener {
-                        thumbRef.downloadUrl.addOnSuccessListener { thumbDownloadUri ->
-                            trySend(UploadStatus.Completed(videoDownloadUri.toString(), thumbDownloadUri.toString()))
-                            close()
-                        }.addOnFailureListener {
-                            trySend(UploadStatus.Completed(videoDownloadUri.toString(), ""))
-                            close()
-                        }
-                    }.addOnFailureListener {
-                        trySend(UploadStatus.Completed(videoDownloadUri.toString(), ""))
-                        close()
-                    }
-                } else {
-                    val thumbBytes = extractVideoFrameBytes(context, videoUri)
-                    if (thumbBytes != null) {
-                        thumbRef.putBytes(thumbBytes).addOnSuccessListener {
-                            thumbRef.downloadUrl.addOnSuccessListener { thumbDownloadUri ->
-                                trySend(UploadStatus.Completed(videoDownloadUri.toString(), thumbDownloadUri.toString()))
-                                close()
-                            }.addOnFailureListener {
-                                trySend(UploadStatus.Completed(videoDownloadUri.toString(), ""))
-                                close()
-                            }
-                        }.addOnFailureListener {
-                            trySend(UploadStatus.Completed(videoDownloadUri.toString(), ""))
-                            close()
-                        }
-                    } else {
-                        trySend(UploadStatus.Completed(videoDownloadUri.toString(), ""))
-                        close()
-                    }
-                }
-            }.addOnFailureListener { e ->
-                trySend(UploadStatus.Failed(e.localizedMessage ?: "Failed to resolve video URL"))
-                close()
-            }
-        }.addOnFailureListener { e ->
-            trySend(UploadStatus.Failed(e.localizedMessage ?: "Video upload failed (verify Firebase Storage bucket is active)"))
-            close()
+        val videoBytes = withContext(Dispatchers.IO) { readUriBytes(context, videoUri) }
+        if (videoBytes == null || videoBytes.isEmpty()) {
+            emit(UploadStatus.Failed("Unable to read selected video file"))
+            return@flow
         }
 
-        awaitClose {
-            if (!uploadTask.isComplete) {
-                uploadTask.cancel()
+        emit(UploadStatus.Progress(35))
+        val videoUrl = try {
+            supabase.uploadStorageObject(
+                objectPath = "videos/$userId/$fileId.mp4",
+                bytes = videoBytes,
+                contentType = context.contentResolver.getType(videoUri) ?: "video/mp4"
+            )
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            emit(
+                UploadStatus.Failed(
+                    e.localizedMessage ?: "Video upload failed (verify Supabase Storage bucket vyora-media)"
+                )
+            )
+            return@flow
+        }
+
+        emit(UploadStatus.Progress(80))
+        val thumbBytes = withContext(Dispatchers.IO) {
+            if (customCoverUri != null) {
+                readUriBytes(context, customCoverUri)
+            } else {
+                extractVideoFrameBytes(context, videoUri)
             }
         }
+
+        val thumbUrl = if (thumbBytes != null && thumbBytes.isNotEmpty()) {
+            runCatching {
+                supabase.uploadStorageObject(
+                    objectPath = "thumbnails/$userId/$fileId.jpg",
+                    bytes = thumbBytes,
+                    contentType = "image/jpeg"
+                )
+            }.getOrDefault("")
+        } else {
+            ""
+        }
+
+        emit(UploadStatus.Progress(100))
+        emit(UploadStatus.Completed(downloadUrl = videoUrl, thumbnailUrl = thumbUrl))
     }
 
     suspend fun uploadImage(userId: String, folder: String, uri: Uri): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val ref = storage.reference.child("$folder/$userId/${UUID.randomUUID()}.jpg")
-            ref.putFile(uri).await()
-            ref.downloadUrl.await().toString()
+            val bytes = readUriBytes(appContext, uri)
+                ?: throw IllegalStateException("Unable to read image file")
+            supabase.uploadStorageObject(
+                objectPath = "$folder/$userId/${UUID.randomUUID()}.jpg",
+                bytes = bytes,
+                contentType = appContext.contentResolver.getType(uri) ?: "image/jpeg"
+            )
         }
     }
 
-    suspend fun uploadMediaFile(userId: String, folder: String, uri: Uri, extension: String): Result<String> =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val ref = storage.reference.child("$folder/$userId/${UUID.randomUUID()}.$extension")
-                ref.putFile(uri).await()
-                ref.downloadUrl.await().toString()
+    suspend fun uploadMediaFile(
+        userId: String,
+        folder: String,
+        uri: Uri,
+        extension: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val bytes = readUriBytes(appContext, uri)
+                ?: throw IllegalStateException("Unable to read media file")
+            val mimeType = when (extension.lowercase()) {
+                "mp4" -> "video/mp4"
+                "m4a" -> "audio/mp4"
+                "mp3" -> "audio/mpeg"
+                else -> "image/jpeg"
             }
+            supabase.uploadStorageObject(
+                objectPath = "$folder/$userId/${UUID.randomUUID()}.$extension",
+                bytes = bytes,
+                contentType = mimeType
+            )
         }
+    }
+
+    private fun readUriBytes(context: Context, uri: Uri): ByteArray? = try {
+        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+    } catch (_: Exception) {
+        null
+    }
 
     private fun extractVideoFrameBytes(context: Context, videoUri: Uri): ByteArray? {
         return try {
@@ -119,7 +127,8 @@ class StorageMediaRepository(
             val bitmap = retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             retriever.release()
             if (bitmap != null) {
-                val scaled = Bitmap.createScaledBitmap(bitmap, 480, (480 * bitmap.height / bitmap.width.coerceAtLeast(1)).coerceAtLeast(480), true)
+                val targetHeight = (480 * bitmap.height / bitmap.width.coerceAtLeast(1)).coerceAtLeast(480)
+                val scaled = Bitmap.createScaledBitmap(bitmap, 480, targetHeight, true)
                 val baos = ByteArrayOutputStream()
                 scaled.compress(Bitmap.CompressFormat.JPEG, 78, baos)
                 baos.toByteArray()

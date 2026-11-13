@@ -16,9 +16,8 @@ data class SupabaseClientDiagnostics(
 )
 
 /**
- * Lightweight client-side connector using only SUPABASE_URL and the RLS-protected
- * SUPABASE_PUBLISHABLE_KEY supplied via BuildConfig (Secrets Panel).
- * Elevated writes and accounting mutations always execute through Firebase Cloud Functions.
+ * Verifies Supabase REST & RLS configuration using SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY
+ * injected via BuildConfig (AI Studio Secrets / GitHub Secrets).
  */
 class SupabaseLedgerClient(
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
@@ -33,10 +32,7 @@ class SupabaseLedgerClient(
         get() = BuildConfig.SUPABASE_PUBLISHABLE_KEY.trim()
 
     val isClientConfigured: Boolean
-        get() = baseUrl.startsWith("https://") &&
-            !baseUrl.contains("YOUR_PROJECT_REF") &&
-            publishableKey.isNotBlank() &&
-            !publishableKey.contains("YOUR_SUPABASE")
+        get() = SupabaseClient.isConfigValid(baseUrl, publishableKey)
 
     suspend fun checkPublicCatalogConnectivity(): SupabaseClientDiagnostics = withContext(Dispatchers.IO) {
         if (!isClientConfigured) {
@@ -67,7 +63,6 @@ class SupabaseLedgerClient(
                     )
                 }
 
-                // Content-Range header format: "0-0/42" or "*/0"
                 val contentRange = response.header("Content-Range").orEmpty()
                 val totalCount = contentRange.substringAfter("/", "0").toIntOrNull() ?: 0
                 SupabaseClientDiagnostics(

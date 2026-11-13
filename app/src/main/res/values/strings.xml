@@ -4,7 +4,15 @@
     <!-- Auth -->
     <string name="auth_tagline">Create. Stream. Shine in Motion.</string>
     <string name="auth_subtitle">Real-time short videos, interactive live rooms, instant chat, and creator rewards.</string>
-    <string name="sign_in_google">Sign in with Google</string>
+    <string name="auth_sign_in">Sign In</string>
+    <string name="auth_create_account">Create Account</string>
+    <string name="auth_display_name">Display Name</string>
+    <string name="auth_email">Email</string>
+    <string name="auth_password">Password</string>
+    <string name="auth_invalid_credentials_hint">Enter a valid email and a password of at least 6 characters.</string>
+    <string name="supabase_auth_ready">Connected to Supabase Backend</string>
+    <string name="supabase_config_missing">Set SUPABASE_URL &amp; SUPABASE_PUBLISHABLE_KEY in Secrets to enable cloud sync</string>
+    <string name="sign_in_google">Continue with Google</string>
     <string name="auth_signing_in">Signing in…</string>
     <string name="auth_cancelled">Sign-in was cancelled. Tap to try again.</string>
 
@@ -82,7 +90,7 @@
     <string name="start_live_btn">Start Live Broadcast</string>
     <string name="end_live_btn">End Broadcast</string>
     <string name="live_viewers">%1$d watching</string>
-    <string name="agora_missing_warning">Deploy Firebase Cloud Functions and configure AGORA_APP_ID &amp; AGORA_APP_CERTIFICATE in Firebase Secret Manager for live video streaming. Live chat &amp; stats are active.</string>
+    <string name="agora_missing_warning">Deploy the Supabase Edge Function (get-agora-token) and set AGORA_APP_ID &amp; AGORA_APP_CERTIFICATE in Supabase Secrets for live video streaming. Live chat &amp; stats are active.</string>
     <string name="no_live_streams">No active live streams right now.</string>
 
     <!-- Profile, Wallet & Admin -->
@@ -121,7 +129,7 @@
     <string name="transactions_history">Earnings History</string>
     <string name="supabase_ledger_title">Supabase Accounting Ledger</string>
     <string name="supabase_ledger_synced">Synced • %1$d entries • %2$d videos</string>
-    <string name="supabase_ledger_pending_config">Set SUPABASE_URL in AI Studio Secrets &amp; deploy Cloud Functions with SUPABASE_SECRET_KEY</string>
+    <string name="supabase_ledger_pending_config">Configure SUPABASE_URL &amp; SUPABASE_PUBLISHABLE_KEY in Secrets and run /supabase/schema.sql</string>
     <string name="supabase_ledger_checking">Checking accounting sync…</string>
     <string name="sync_now">Sync</string>
 

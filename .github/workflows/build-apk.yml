@@ -43,27 +43,27 @@ jobs:
         with:
           gradle-version: 9.3.1
 
-      - name: Prepare environment config
+      - name: Prepare Supabase environment config
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
+          SUPABASE_GOOGLE_WEB_CLIENT_ID: ${{ secrets.SUPABASE_GOOGLE_WEB_CLIENT_ID }}
         run: |
-          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_PUBLISHABLE_KEY" ]; then
-            printf 'SUPABASE_URL=%s\nSUPABASE_PUBLISHABLE_KEY=%s\n' "$SUPABASE_URL" "$SUPABASE_PUBLISHABLE_KEY" > .env
-          fi
-
-      - name: Prepare Firebase config (google-services.json)
-        env:
-          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-        run: |
-          if [ ! -f app/google-services.json ] && [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
-            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
-          fi
-          if [ -f app/google-services.json ]; then
-            echo "Found app/google-services.json"
-          else
-            echo "::warning::app/google-services.json not found; building with MissingGoogleServicesStrategy.WARN"
-          fi
+          {
+            if [ -n "$SUPABASE_URL" ]; then
+              printf 'SUPABASE_URL=%s\n' "$SUPABASE_URL"
+            fi
+            if [ -n "$SUPABASE_PUBLISHABLE_KEY" ]; then
+              printf 'SUPABASE_PUBLISHABLE_KEY=%s\n' "$SUPABASE_PUBLISHABLE_KEY"
+            fi
+            if [ -n "$SUPABASE_STORAGE_BUCKET" ]; then
+              printf 'SUPABASE_STORAGE_BUCKET=%s\n' "$SUPABASE_STORAGE_BUCKET"
+            fi
+            if [ -n "$SUPABASE_GOOGLE_WEB_CLIENT_ID" ]; then
+              printf 'SUPABASE_GOOGLE_WEB_CLIENT_ID=%s\n' "$SUPABASE_GOOGLE_WEB_CLIENT_ID"
+            fi
+          } > .env
 
       - name: Prepare signing keystore & build APK
         env:
@@ -112,6 +112,6 @@ jobs:
         with:
           tag_name: vyora-latest
           name: VYORA Latest Android APK
-          body: Automated Android APK build for VYORA.
+          body: Automated Android APK build for VYORA (Pure Supabase Edition).
           files: VYORA.apk
           make_latest: true

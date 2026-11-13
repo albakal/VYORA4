@@ -23,21 +23,19 @@ import com.example.data.model.Wallet
 import com.example.data.model.WalletTransaction
 import com.example.data.model.WithdrawalRequest
 import com.example.data.remote.AgoraLiveSession
-import com.example.data.remote.CloudFunctionsRepository
 import com.example.data.remote.StorageMediaRepository
+import com.example.data.remote.SupabaseBackendRepository
+import com.example.data.remote.SupabaseClient
 import com.example.data.remote.SupabaseClientDiagnostics
 import com.example.data.remote.SupabaseLedgerClient
 import com.example.data.remote.SupabaseWalletSummary
 import com.example.data.remote.UploadStatus
-import com.example.data.remote.unwrapFirestoreException
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.LiveRepository
 import com.example.data.repository.NotificationRepository
 import com.example.data.repository.UserRepository
 import com.example.data.repository.VideoRepository
 import com.example.data.repository.WalletAdminRepository
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -73,6 +71,7 @@ sealed interface LedgerSyncState {
 @OptIn(ExperimentalCoroutinesApi::class)
 class VyoraAppViewModel(
     val currentUserId: String,
+    private val supabaseClient: SupabaseClient,
     private val userRepo: UserRepository,
     private val videoRepo: VideoRepository,
     private val chatRepo: ChatRepository,
@@ -80,7 +79,7 @@ class VyoraAppViewModel(
     private val notifRepo: NotificationRepository,
     private val walletAdminRepo: WalletAdminRepository,
     private val storageRepo: StorageMediaRepository,
-    private val cloudFunctionsRepo: CloudFunctionsRepository = CloudFunctionsRepository(),
+    private val backendRepo: SupabaseBackendRepository,
     private val supabaseLedgerClient: SupabaseLedgerClient = SupabaseLedgerClient()
 ) : ViewModel() {
 
@@ -96,121 +95,123 @@ class VyoraAppViewModel(
     private val _ledgerSyncState = MutableStateFlow<LedgerSyncState>(LedgerSyncState.Checking)
     val ledgerSyncState: StateFlow<LedgerSyncState> = _ledgerSyncState.asStateFlow()
 
+    private val _feedRefreshTrigger = MutableStateFlow(0)
+
     val currentUserProfile: StateFlow<UserProfile?> = userRepo.observeUser(currentUserId)
         .catch { e ->
-            if (e.unwrapFirestoreException() == null && e is CancellationException) throw e
+            if (e is CancellationException) throw e
             Log.w(TAG, "Profile observe error", e)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
 
-    val feedVideos: StateFlow<UiState<List<VideoPost>>> = videoRepo.observeActiveVideos()
-        .map<List<VideoPost>, UiState<List<VideoPost>>> { UiState.Success(it) }
-        .catch { e ->
-            val fs = e.unwrapFirestoreException()
-            if (fs == null && e is CancellationException) throw e
-            emit(UiState.Error((fs ?: e).localizedMessage ?: "Failed to load feed"))
+    val feedVideos: StateFlow<UiState<List<VideoPost>>> = _feedRefreshTrigger
+        .flatMapLatest {
+            videoRepo.observeActiveVideos()
+                .map<List<VideoPost>, UiState<List<VideoPost>>> { UiState.Success(it) }
+                .catch { e ->
+                    if (e is CancellationException) throw e
+                    emit(UiState.Error(e.localizedMessage ?: "Failed to load feed"))
+                }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
     val activeUsers: StateFlow<List<UserProfile>> = userRepo.observeActiveUsers()
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val followingIds: StateFlow<Set<String>> = userRepo.observeFollowingIds(currentUserId)
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptySet())
 
     val blockedIds: StateFlow<Set<String>> = userRepo.observeBlockedIds(currentUserId)
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptySet())
 
     val bookmarkedIds: StateFlow<Set<String>> = videoRepo.observeBookmarkedIds(currentUserId)
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptySet())
 
     val followRequests: StateFlow<List<FollowRequest>> = userRepo.observeIncomingFollowRequests(currentUserId)
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val conversations: StateFlow<List<Conversation>> = chatRepo.observeConversations(currentUserId)
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val notifications: StateFlow<List<AppNotification>> = notifRepo.observeNotifications(currentUserId)
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val activeLiveStreams: StateFlow<List<LiveStream>> = liveRepo.observeActiveStreams()
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val sounds: StateFlow<List<SoundTrack>> = videoRepo.observeSounds()
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val hashtags: StateFlow<List<HashtagItem>> = videoRepo.observeHashtags()
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val wallet: StateFlow<Wallet?> = walletAdminRepo.observeWallet(currentUserId)
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
 
     val transactions: StateFlow<List<WalletTransaction>> = walletAdminRepo.observeTransactions(currentUserId)
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val myWithdrawals: StateFlow<List<WithdrawalRequest>> = walletAdminRepo.observeMyWithdrawals(currentUserId)
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val adminSettings: StateFlow<AdminSettings> = walletAdminRepo.observeAdminSettings()
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), AdminSettings())
 
-    // Admin Streams (only subscribed when isAdmin == true)
     val adminUsers: StateFlow<List<UserProfile>> = _isAdmin
         .flatMapLatest { admin -> if (admin) walletAdminRepo.observeAllUsersAdmin() else flowOf(emptyList()) }
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val adminVideos: StateFlow<List<VideoPost>> = _isAdmin
         .flatMapLatest { admin -> if (admin) walletAdminRepo.observeAllVideosAdmin() else flowOf(emptyList()) }
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val adminReports: StateFlow<List<ModerationReport>> = _isAdmin
         .flatMapLatest { admin -> if (admin) walletAdminRepo.observeReportsAdmin() else flowOf(emptyList()) }
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val adminWithdrawals: StateFlow<List<WithdrawalRequest>> = _isAdmin
         .flatMapLatest { admin -> if (admin) walletAdminRepo.observeWithdrawalsAdmin() else flowOf(emptyList()) }
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val adminRoles: StateFlow<List<AdminRole>> = _isAdmin
         .flatMapLatest { admin -> if (admin) walletAdminRepo.observeAdmins() else flowOf(emptyList()) }
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val adminLiveStreams: StateFlow<List<LiveStream>> = _isAdmin
         .flatMapLatest { admin -> if (admin) walletAdminRepo.observeLiveStreamsAdmin() else flowOf(emptyList()) }
-        .catch { e -> if (e.unwrapFirestoreException() == null && e is CancellationException) throw e }
+        .catch { e -> if (e is CancellationException) throw e }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     init {
         viewModelScope.launch {
-            val firebaseUser = Firebase.auth.currentUser
-            if (firebaseUser != null) {
+            val user = supabaseClient.currentUser
+            if (user != null) {
                 userRepo.ensureUserProfile(
-                    uid = firebaseUser.uid,
-                    email = firebaseUser.email.orEmpty(),
-                    displayName = firebaseUser.displayName,
-                    avatarUrl = firebaseUser.photoUrl?.toString()
+                    uid = user.uid,
+                    email = user.email,
+                    displayName = user.displayName,
+                    avatarUrl = user.avatarUrl
                 )
-                _isAdmin.value = walletAdminRepo.checkIsAdmin(firebaseUser.uid, firebaseUser.email)
-                cloudFunctionsRepo.syncUserAndVideoToSupabase()
+                _isAdmin.value = walletAdminRepo.checkIsAdmin(user.uid, user.email)
                 refreshAccountingSync()
             }
         }
@@ -220,7 +221,7 @@ class VyoraAppViewModel(
         viewModelScope.launch {
             _ledgerSyncState.value = LedgerSyncState.Checking
             val diagDeferred = async { supabaseLedgerClient.checkPublicCatalogConnectivity() }
-            val summaryDeferred = async { cloudFunctionsRepo.fetchWalletAccountingSummary() }
+            val summaryDeferred = async { backendRepo.fetchWalletAccountingSummary() }
 
             val diag = diagDeferred.await()
             val summaryRes = summaryDeferred.await()
@@ -235,6 +236,12 @@ class VyoraAppViewModel(
                 )
             }
         }
+    }
+
+    fun retryFeed() {
+        _feedRefreshTrigger.value += 1
+        supabaseClient.notifyChange("videos", "profiles")
+        refreshAccountingSync()
     }
 
     fun clearToast() {
@@ -274,14 +281,12 @@ class VyoraAppViewModel(
     }
 
     suspend fun fetchAgoraLiveSession(streamId: String): Result<AgoraLiveSession> =
-        cloudFunctionsRepo.fetchAgoraLiveSession(streamId)
+        backendRepo.fetchAgoraLiveSession(streamId)
 
     fun recordView(videoId: String) {
         viewModelScope.launch {
-            cloudFunctionsRepo.recordVideoViewServer(videoId).onFailure { err ->
-                if (cloudFunctionsRepo.isFunctionUnavailable(err)) {
-                    videoRepo.recordViewIfNew(videoId)
-                }
+            backendRepo.recordVideoViewServer(videoId).onFailure {
+                videoRepo.recordViewIfNew(videoId)
             }
         }
     }
@@ -362,9 +367,9 @@ class VyoraAppViewModel(
                             soundId = soundId,
                             soundTitle = soundTitle,
                             durationSec = durationSec
-                        ).onSuccess { newVideoId ->
-                            cloudFunctionsRepo.syncUserAndVideoToSupabase(newVideoId)
+                        ).onSuccess {
                             _toastMessage.value = "Video published!"
+                            refreshAccountingSync()
                             onPublished()
                         }.onFailure { e ->
                             _uploadState.value = UploadStatus.Failed(e.localizedMessage ?: "Failed to save video")
@@ -377,7 +382,6 @@ class VyoraAppViewModel(
     fun updateVideoCaption(videoId: String, caption: String) {
         viewModelScope.launch {
             videoRepo.updateVideoCaption(videoId, caption).onSuccess {
-                cloudFunctionsRepo.syncUserAndVideoToSupabase(videoId)
                 _toastMessage.value = "Updated"
             }.onFailure {
                 _toastMessage.value = it.localizedMessage
@@ -411,10 +415,7 @@ class VyoraAppViewModel(
                 currentAvatarUrl
             }
             userRepo.updateProfile(username, displayName, bio, finalAvatar, isPrivate, interests)
-                .onSuccess {
-                    cloudFunctionsRepo.syncUserAndVideoToSupabase()
-                    _toastMessage.value = "Profile saved"
-                }
+                .onSuccess { _toastMessage.value = "Profile saved" }
                 .onFailure { _toastMessage.value = it.localizedMessage }
         }
     }
@@ -549,24 +550,17 @@ class VyoraAppViewModel(
         }
         val pointsNeeded = (amountUsd / settings.pointValueUsd.coerceAtLeast(0.0001)).toLong().coerceAtLeast(1L)
         viewModelScope.launch {
-            cloudFunctionsRepo.submitWithdrawalServer(amountUsd, method, accountDetails)
+            backendRepo.submitWithdrawalServer(amountUsd, method, accountDetails)
                 .onSuccess {
                     _toastMessage.value = "Withdrawal request submitted"
                     refreshAccountingSync()
                 }
                 .onFailure { err ->
-                    if (cloudFunctionsRepo.isFunctionUnavailable(err)) {
-                        walletAdminRepo.submitWithdrawalRequest(amountUsd, pointsNeeded, method, accountDetails)
-                            .onSuccess { _toastMessage.value = "Withdrawal request submitted" }
-                            .onFailure { _toastMessage.value = it.localizedMessage }
-                    } else {
-                        _toastMessage.value = err.localizedMessage
-                    }
+                    _toastMessage.value = err.localizedMessage
                 }
         }
     }
 
-    // --- Admin Actions ---
     fun adminSetUserBanned(targetUid: String, banned: Boolean) {
         viewModelScope.launch {
             walletAdminRepo.setUserBanned(targetUid, banned).onFailure { _toastMessage.value = it.localizedMessage }
@@ -587,35 +581,20 @@ class VyoraAppViewModel(
 
     fun adminReviewWithdrawal(request: WithdrawalRequest, approve: Boolean) {
         viewModelScope.launch {
-            cloudFunctionsRepo.adminReviewWithdrawalServer(request.id, approve)
+            backendRepo.adminReviewWithdrawalServer(request.id, approve)
                 .onSuccess { refreshAccountingSync() }
-                .onFailure { err ->
-                    if (cloudFunctionsRepo.isFunctionUnavailable(err)) {
-                        walletAdminRepo.reviewWithdrawalAdmin(request, approve)
-                            .onFailure { _toastMessage.value = it.localizedMessage }
-                    } else {
-                        _toastMessage.value = err.localizedMessage
-                    }
-                }
+                .onFailure { err -> _toastMessage.value = err.localizedMessage }
         }
     }
 
     fun adminGrantPoints(targetUid: String, points: Long, reason: String) {
         viewModelScope.launch {
-            cloudFunctionsRepo.adminGrantPointsServer(targetUid, points, reason)
+            backendRepo.adminGrantPointsServer(targetUid, points, reason)
                 .onSuccess {
                     _toastMessage.value = "Points updated"
                     refreshAccountingSync()
                 }
-                .onFailure { err ->
-                    if (cloudFunctionsRepo.isFunctionUnavailable(err)) {
-                        walletAdminRepo.grantCreatorPointsAdmin(targetUid, points, adminSettings.value.pointValueUsd, reason)
-                            .onSuccess { _toastMessage.value = "Points updated" }
-                            .onFailure { _toastMessage.value = it.localizedMessage }
-                    } else {
-                        _toastMessage.value = err.localizedMessage
-                    }
-                }
+                .onFailure { err -> _toastMessage.value = err.localizedMessage }
         }
     }
 

@@ -1,13 +1,30 @@
 package com.example.data.model
 
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.DocumentId
-import com.google.firebase.firestore.IgnoreExtraProperties
-import com.google.firebase.firestore.ServerTimestamp
+import java.time.Instant
 
-@IgnoreExtraProperties
+data class VyoraTimestamp(
+    val epochMillis: Long = System.currentTimeMillis()
+) : Comparable<VyoraTimestamp> {
+    override fun compareTo(other: VyoraTimestamp): Int =
+        epochMillis.compareTo(other.epochMillis)
+
+    companion object {
+        val ZERO = VyoraTimestamp(0L)
+
+        fun parse(isoOrNull: String?): VyoraTimestamp? {
+            val raw = isoOrNull?.trim().orEmpty()
+            if (raw.isEmpty() || raw == "null") return null
+            return try {
+                VyoraTimestamp(Instant.parse(raw).toEpochMilli())
+            } catch (_: Exception) {
+                raw.toLongOrNull()?.let { VyoraTimestamp(it) }
+            }
+        }
+    }
+}
+
 data class UserProfile(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val username: String = "",
     val displayName: String = "",
@@ -21,34 +38,31 @@ data class UserProfile(
     val interests: List<String> = emptyList(),
     val language: String = "ar",
     val themeMode: String = "dark",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null,
+    val updatedAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class FollowEdge(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val username: String = "",
     val avatarUrl: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class FollowRequest(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val requesterId: String = "",
     val requesterUsername: String = "",
     val requesterAvatarUrl: String = "",
     val targetId: String = "",
     val status: String = "pending",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null,
+    val updatedAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class VideoPost(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val creatorUsername: String = "",
     val creatorAvatarUrl: String = "",
@@ -65,32 +79,29 @@ data class VideoPost(
     val sharesCount: Long = 0L,
     val bookmarksCount: Long = 0L,
     val status: String = "active",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null,
+    val updatedAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class VideoComment(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val videoId: String = "",
     val userId: String = "",
     val username: String = "",
     val avatarUrl: String = "",
     val text: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class HashtagItem(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val tag: String = "",
     val videosCount: Long = 0L,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val updatedAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class SoundTrack(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val title: String = "",
     val artist: String = "",
     val audioUrl: String = "",
@@ -99,24 +110,22 @@ data class SoundTrack(
     val isLicensed: Boolean = true,
     val creatorId: String = "",
     val usesCount: Long = 0L,
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class Conversation(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val participantIds: List<String> = emptyList(),
     val lastMessage: String = "",
     val lastMessageType: String = "text",
     val lastSenderId: String = "",
-    @ServerTimestamp val lastMessageAt: Timestamp? = null,
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val lastMessageAt: VyoraTimestamp? = null,
+    val createdAt: VyoraTimestamp? = null,
+    val updatedAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class ChatMessage(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val senderId: String = "",
     val participantIds: List<String> = emptyList(),
     val type: String = "text",
@@ -124,12 +133,11 @@ data class ChatMessage(
     val mediaUrl: String = "",
     val audioDurationMs: Long = 0L,
     val readBy: List<String> = emptyList(),
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class AppNotification(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val recipientId: String = "",
     val actorId: String = "",
     val actorUsername: String = "",
@@ -138,12 +146,11 @@ data class AppNotification(
     val targetId: String = "",
     val message: String = "",
     val isRead: Boolean = false,
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class LiveStream(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val hostId: String = "",
     val hostUsername: String = "",
     val hostAvatarUrl: String = "",
@@ -152,23 +159,21 @@ data class LiveStream(
     val isActive: Boolean = true,
     val viewerCount: Long = 1L,
     val likesCount: Long = 0L,
-    @ServerTimestamp val startedAt: Timestamp? = null,
-    val endedAt: Timestamp? = null
+    val startedAt: VyoraTimestamp? = null,
+    val endedAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class LiveComment(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val streamId: String = "",
     val userId: String = "",
     val username: String = "",
     val text: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class ModerationReport(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val reporterId: String = "",
     val targetType: String = "video",
     val targetId: String = "",
@@ -176,35 +181,32 @@ data class ModerationReport(
     val details: String = "",
     val status: String = "pending",
     val reviewedBy: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null,
+    val updatedAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class Wallet(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val points: Long = 0L,
     val balanceUsd: Double = 0.0,
     val totalEarnedUsd: Double = 0.0,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val updatedAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class WalletTransaction(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val type: String = "view_reward",
     val pointsDelta: Long = 0L,
     val amountDelta: Double = 0.0,
     val description: String = "",
     val status: String = "completed",
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class WithdrawalRequest(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val amountUsd: Double = 0.0,
     val pointsSpent: Long = 0L,
@@ -212,27 +214,25 @@ data class WithdrawalRequest(
     val accountDetails: String = "",
     val status: String = "pending",
     val reviewedBy: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null,
+    val updatedAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class AdminSettings(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val pointValueUsd: Double = 0.01,
     val minWithdrawalUsd: Double = 10.0,
     val rewardsEnabled: Boolean = true,
     val maxVideoDurationSec: Long = 180L,
     val updatedBy: String = "",
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val updatedAt: VyoraTimestamp? = null
 )
 
-@IgnoreExtraProperties
 data class AdminRole(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val email: String = "",
     val role: String = "moderator",
     val assignedBy: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null
+    val createdAt: VyoraTimestamp? = null
 )

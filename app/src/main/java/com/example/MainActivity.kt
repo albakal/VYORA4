@@ -56,7 +56,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -70,8 +69,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.data.preferences.AppPreferences
 import com.example.data.preferences.AppPreferencesRepository
-import com.example.data.remote.CloudFunctionsRepository
 import com.example.data.remote.StorageMediaRepository
+import com.example.data.remote.SupabaseBackendRepository
+import com.example.data.remote.SupabaseClient
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.LiveRepository
 import com.example.data.repository.NotificationRepository
@@ -82,8 +82,7 @@ import com.example.media.LocalNotificationHelper
 import com.example.ui.VyoraAppViewModel
 import com.example.ui.admin.AdminDashboardScreen
 import com.example.ui.auth.AuthScreen
-import com.example.ui.auth.attemptAutoSignIn
-import com.example.ui.auth.authStateFlow
+import com.example.ui.auth.restoreSupabaseSession
 import com.example.ui.discover.DiscoverSearchScreen
 import com.example.ui.discover.SoundDetailScreen
 import com.example.ui.feed.HomeFeedScreen
@@ -101,8 +100,6 @@ import com.example.ui.theme.VyoraTheme
 import com.example.ui.theme.vString
 import com.example.ui.wallet.NotificationsScreen
 import com.example.ui.wallet.WalletScreen
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
 
 object VyoraRoutes {
@@ -137,21 +134,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             val scope = rememberCoroutineScope()
+            val supabase = remember(context) { SupabaseClient.getInstance(context.applicationContext) }
             val prefsRepo = remember(context) { AppPreferencesRepository(context.applicationContext) }
             val prefs by prefsRepo.preferencesFlow.collectAsStateWithLifecycle(initialValue = AppPreferences())
-            val currentUser by Firebase.auth.authStateFlow()
-                .collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
-
-            val credentialManager = remember(context) { CredentialManager.create(context) }
+            val currentUser by supabase.authState.collectAsStateWithLifecycle()
 
             LaunchedEffect(Unit) {
-                attemptAutoSignIn(
-                    context = context,
-                    credentialManager = credentialManager,
-                    onAuthSuccess = {},
-                    onUnauthenticated = {},
-                    scope = scope
-                )
+                restoreSupabaseSession(context = context, scope = scope)
             }
 
             VyoraTheme(themeMode = prefs.themeMode, language = prefs.language) {
@@ -172,16 +161,18 @@ class MainActivity : ComponentActivity() {
                             factory = viewModelFactory {
                                 initializer {
                                     val appCtx = context.applicationContext
+                                    val client = SupabaseClient.getInstance(appCtx)
                                     VyoraAppViewModel(
                                         currentUserId = user.uid,
-                                        userRepo = UserRepository(appCtx),
-                                        videoRepo = VideoRepository(appCtx),
-                                        chatRepo = ChatRepository(appCtx),
-                                        liveRepo = LiveRepository(appCtx),
-                                        notifRepo = NotificationRepository(appCtx),
-                                        walletAdminRepo = WalletAdminRepository(appCtx),
-                                        storageRepo = StorageMediaRepository(),
-                                        cloudFunctionsRepo = CloudFunctionsRepository()
+                                        supabaseClient = client,
+                                        userRepo = UserRepository(client),
+                                        videoRepo = VideoRepository(client),
+                                        chatRepo = ChatRepository(client),
+                                        liveRepo = LiveRepository(client),
+                                        notifRepo = NotificationRepository(client),
+                                        walletAdminRepo = WalletAdminRepository(client),
+                                        storageRepo = StorageMediaRepository(appCtx, client),
+                                        backendRepo = SupabaseBackendRepository(client)
                                     )
                                 }
                             }
@@ -226,7 +217,6 @@ private fun VyoraAuthenticatedApp(
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     val notifications by viewModel.notifications.collectAsStateWithLifecycle()
 
-    // Request POST_NOTIFICATIONS once on Android 13+ when entering authenticated shell
     val notifPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* optional notification alerts */ }
@@ -251,7 +241,6 @@ private fun VyoraAuthenticatedApp(
         }
     }
 
-    // Trigger local notifications for newly arriving unread activity items
     var seenNotifIds by remember { mutableStateOf<Set<String>?>(null) }
     LaunchedEffect(notifications) {
         val currentIds = notifications.map { it.id }.toSet()
@@ -540,7 +529,6 @@ private fun VyoraBottomNavBar(
                 modifier = Modifier.weight(1f)
             )
 
-            // Center Elevated VYORA (+) Button
             Box(
                 modifier = Modifier
                     .padding(horizontal = 6.dp)
