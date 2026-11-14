@@ -3,8 +3,13 @@ package com.example.ui.live
 import android.Manifest
 import android.content.pm.PackageManager
 import android.view.SurfaceView
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -53,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +75,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.model.LiveStream
@@ -274,6 +281,8 @@ fun LiveRoomScreen(
     onExit: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
     val stream by viewModel.observeLiveStream(streamId).collectAsStateWithLifecycle(initialValue = null)
     val comments by viewModel.observeLiveComments(streamId).collectAsStateWithLifecycle(initialValue = emptyList())
     val activeUsers by viewModel.activeUsers.collectAsStateWithLifecycle()
@@ -281,16 +290,32 @@ fun LiveRoomScreen(
 
     var commentText by remember { mutableStateOf("") }
     var isMicMuted by remember { mutableStateOf(false) }
+    var isFrontCamera by remember { mutableStateOf(true) }
     var remoteUid by remember { mutableIntStateOf(0) }
     var rtcEngine by remember { mutableStateOf<RtcEngine?>(null) }
     var liveSession by remember { mutableStateOf<AgoraLiveSession?>(null) }
     var isFetchingToken by remember { mutableStateOf(true) }
     var tokenError by remember { mutableStateOf<String?>(null) }
+    var tokenRetryKey by remember { mutableIntStateOf(0) }
+
+    val handleExit: () -> Unit = {
+        if (isHost) {
+            viewModel.endLiveStream(streamId)
+        } else {
+            viewModel.joinOrLeaveLiveViewer(streamId, -1L)
+        }
+        onExit()
+    }
+
+    BackHandler(onBack = handleExit)
 
     LaunchedEffect(streamId, isHost) {
         if (!isHost) {
             viewModel.joinOrLeaveLiveViewer(streamId, 1L)
         }
+    }
+
+    LaunchedEffect(streamId, tokenRetryKey) {
         isFetchingToken = true
         tokenError = null
         viewModel.fetchAgoraLiveSession(streamId)
@@ -314,11 +339,19 @@ fun LiveRoomScreen(
                     mAppId = session.appId
                     mEventHandler = object : IRtcEngineEventHandler() {
                         override fun onUserJoined(uid: Int, elapsed: Int) {
-                            remoteUid = uid
+                            mainExecutor.execute { remoteUid = uid }
                         }
 
                         override fun onUserOffline(uid: Int, reason: Int) {
-                            if (remoteUid == uid) remoteUid = 0
+                            mainExecutor.execute {
+                                if (remoteUid == uid) remoteUid = 0
+                            }
+                        }
+
+                        override fun onError(err: Int) {
+                            mainExecutor.execute {
+                                tokenError = "Agora RTC error ($err)"
+                            }
                         }
                     }
                 }
@@ -333,7 +366,8 @@ fun LiveRoomScreen(
                 }
                 engine.joinChannel(session.token, session.channelName, session.rtcUid, options)
                 rtcEngine = engine
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                tokenError = e.localizedMessage ?: "Failed to start live video engine"
                 rtcEngine = null
             }
         }
@@ -360,27 +394,61 @@ fun LiveRoomScreen(
             .navigationBarsPadding()
             .imePadding()
     ) {
-        // Agora Video Canvas (Local for Host, Remote for Audience)
+        // Agora Video Canvas (Local for Host, Remote for Audience) or local CameraX preview fallback for Host
+        val hasCameraPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (rtcEngine != null) {
             if (isHost) {
-                AndroidView(
-                    factory = { ctx ->
-                        SurfaceView(ctx).also { sv ->
-                            rtcEngine?.setupLocalVideo(VideoCanvas(sv, VideoCanvas.RENDER_MODE_HIDDEN, 0))
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+                key(rtcEngine) {
+                    AndroidView(
+                        factory = { ctx ->
+                            SurfaceView(ctx).also { sv ->
+                                rtcEngine?.setupLocalVideo(VideoCanvas(sv, VideoCanvas.RENDER_MODE_HIDDEN, 0))
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             } else if (remoteUid != 0) {
-                AndroidView(
-                    factory = { ctx ->
-                        SurfaceView(ctx).also { sv ->
-                            rtcEngine?.setupRemoteVideo(VideoCanvas(sv, VideoCanvas.RENDER_MODE_HIDDEN, remoteUid))
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+                key(rtcEngine, remoteUid) {
+                    AndroidView(
+                        factory = { ctx ->
+                            SurfaceView(ctx).also { sv ->
+                                rtcEngine?.setupRemoteVideo(VideoCanvas(sv, VideoCanvas.RENDER_MODE_HIDDEN, remoteUid))
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
+        } else if (isHost && !isFetchingToken && hasCameraPerm) {
+            val fallbackPreviewView = remember { PreviewView(context) }
+            DisposableEffect(isFrontCamera) {
+                val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+                cameraProviderFuture.addListener({
+                    try {
+                        val cameraProvider = cameraProviderFuture.get()
+                        val preview = Preview.Builder().build().also {
+                            it.surfaceProvider = fallbackPreviewView.surfaceProvider
+                        }
+                        val selector = if (isFrontCamera) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                        cameraProvider.unbindAll()
+                        cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview)
+                    } catch (_: Exception) {
+                    }
+                }, mainExecutor)
+
+                onDispose {
+                    runCatching {
+                        if (cameraProviderFuture.isDone) {
+                            cameraProviderFuture.get().unbindAll()
+                        }
+                    }
+                }
+            }
+            AndroidView(
+                factory = { fallbackPreviewView },
+                modifier = Modifier.fillMaxSize()
+            )
         }
 
         if (isFetchingToken) {
@@ -390,7 +458,7 @@ fun LiveRoomScreen(
             )
         } else if (liveSession == null) {
             Surface(
-                color = ElectricViolet.copy(alpha = 0.25f),
+                color = Color.Black.copy(alpha = 0.65f),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .align(Alignment.Center)
@@ -398,10 +466,11 @@ fun LiveRoomScreen(
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = vString(R.string.agora_missing_warning),
+                        text = if (isHost && hasCameraPerm) vString(R.string.live_preview_local_note)
+                        else vString(R.string.agora_missing_warning),
                         color = Color.White,
                         style = MaterialTheme.typography.bodyLarge
                     )
@@ -411,6 +480,12 @@ fun LiveRoomScreen(
                             color = Color.White.copy(alpha = 0.72f),
                             style = MaterialTheme.typography.bodySmall
                         )
+                    }
+                    TextButton(
+                        onClick = { tokenRetryKey += 1 },
+                        modifier = Modifier.testTag("retry_live_token_button")
+                    ) {
+                        Text(vString(R.string.retry), color = NeonCyan)
                     }
                 }
             }
@@ -540,7 +615,10 @@ fun LiveRoomScreen(
                             tint = Color.White
                         )
                     }
-                    IconButton(onClick = { rtcEngine?.switchCamera() }) {
+                    IconButton(onClick = {
+                        isFrontCamera = !isFrontCamera
+                        rtcEngine?.switchCamera()
+                    }) {
                         Icon(Icons.Filled.Cameraswitch, contentDescription = "Switch Camera", tint = Color.White)
                     }
                 } else {

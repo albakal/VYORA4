@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -104,7 +105,9 @@ import com.example.ui.theme.ElectricViolet
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.PulseMagenta
 import com.example.ui.theme.vString
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -174,12 +177,31 @@ fun CreateStudioScreen(
         }
     }
 
+    var selectedDurationSec by remember { mutableLongStateOf(5L) }
+
+    LaunchedEffect(selectedVideoUri) {
+        val uri = selectedVideoUri ?: return@LaunchedEffect
+        val probedSec = withContext(Dispatchers.IO) {
+            runCatching {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, uri)
+                    val ms = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                    (ms / 1000L).coerceIn(1L, 300L)
+                } finally {
+                    retriever.release()
+                }
+            }.getOrDefault(0L)
+        }
+        selectedDurationSec = if (probedSec > 0L) probedSec else elapsedSec.coerceIn(5L, 300L)
+    }
+
     if (selectedVideoUri != null) {
         VideoPublishEditor(
             videoUri = selectedVideoUri!!,
             coverUri = selectedCoverUri,
             selectedSound = selectedSound,
-            durationSec = elapsedSec.coerceAtLeast(5L),
+            durationSec = selectedDurationSec,
             uploadState = uploadState,
             onPickCover = {
                 coverPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -190,6 +212,7 @@ fun CreateStudioScreen(
                 selectedVideoUri = null
                 selectedCoverUri = null
                 elapsedSec = 0L
+                selectedDurationSec = 5L
             },
             onPublish = { caption ->
                 viewModel.uploadAndPublishVideo(
@@ -199,7 +222,7 @@ fun CreateStudioScreen(
                     caption = caption,
                     soundId = selectedSound?.id.orEmpty(),
                     soundTitle = selectedSound?.title ?: context.getString(R.string.studio_original_sound),
-                    durationSec = elapsedSec.coerceAtLeast(5L),
+                    durationSec = selectedDurationSec,
                     onPublished = {
                         viewModel.clearUploadState()
                         onClose()
@@ -385,7 +408,10 @@ fun CreateStudioScreen(
                                 modifier = Modifier
                                     .size(72.dp)
                                     .clickable {
-                                        val vc = videoCapture ?: return@clickable
+                                        val vc = videoCapture ?: run {
+                                            viewModel.showToast(context.getString(R.string.camera_initializing_hint))
+                                            return@clickable
+                                        }
                                         val name = "VYORA_${System.currentTimeMillis()}.mp4"
                                         val cv = ContentValues().apply {
                                             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -414,6 +440,10 @@ fun CreateStudioScreen(
                                                         isPaused = false
                                                         if (!event.hasError()) {
                                                             selectedVideoUri = event.outputResults.outputUri
+                                                        } else {
+                                                            viewModel.showToast(
+                                                                context.getString(R.string.recording_failed_error, event.error)
+                                                            )
                                                         }
                                                     }
                                                 }

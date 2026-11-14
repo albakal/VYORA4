@@ -24,9 +24,13 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
+import java.io.InputStream
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
@@ -55,9 +59,9 @@ class SupabaseException(
 class SupabaseClient private constructor(
     private val appContext: Context,
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(180, TimeUnit.SECONDS)
         .build()
 ) {
     private val keyAccessToken = stringPreferencesKey("access_token")
@@ -401,7 +405,7 @@ class SupabaseClient private constructor(
     ): String = withContext(Dispatchers.IO) {
         requireConfigured()
         val authToken = requireUserBearerToken()
-        val cleanPath = objectPath.trimStart('/')
+        val cleanPath = encodeStoragePath(objectPath)
         val req = Request.Builder()
             .url("$baseUrl/storage/v1/object/$storageBucket/$cleanPath")
             .addHeader("apikey", publishableKey)
@@ -419,6 +423,58 @@ class SupabaseClient private constructor(
             "$baseUrl/storage/v1/object/public/$storageBucket/$cleanPath"
         }
     }
+
+    suspend fun uploadStorageStream(
+        objectPath: String,
+        contentLength: Long,
+        contentType: String,
+        openStream: () -> InputStream?
+    ): String = withContext(Dispatchers.IO) {
+        requireConfigured()
+        val authToken = requireUserBearerToken()
+        val cleanPath = encodeStoragePath(objectPath)
+        val streamBody = object : RequestBody() {
+            override fun contentType() = contentType.toMediaType()
+            override fun contentLength(): Long = if (contentLength > 0L) contentLength else -1L
+            override fun writeTo(sink: BufferedSink) {
+                val input = openStream() ?: throw IOException("Unable to open media stream for upload")
+                input.use { stream ->
+                    val out = sink.outputStream()
+                    val buffer = ByteArray(16 * 1024)
+                    while (true) {
+                        val read = stream.read(buffer)
+                        if (read == -1) break
+                        out.write(buffer, 0, read)
+                    }
+                    out.flush()
+                }
+            }
+        }
+        val req = Request.Builder()
+            .url("$baseUrl/storage/v1/object/$storageBucket/$cleanPath")
+            .addHeader("apikey", publishableKey)
+            .addHeader("Authorization", "Bearer $authToken")
+            .addHeader("x-upsert", "true")
+            .addHeader("Content-Type", contentType)
+            .post(streamBody)
+            .build()
+
+        httpClient.newCall(req).execute().use { resp ->
+            val raw = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                throw SupabaseException(resp.code, parseSupabaseError(raw, resp.code))
+            }
+            "$baseUrl/storage/v1/object/public/$storageBucket/$cleanPath"
+        }
+    }
+
+    private fun encodeStoragePath(objectPath: String): String =
+        objectPath.trimStart('/')
+            .split("/")
+            .filter { it.isNotBlank() }
+            .joinToString("/") { segment ->
+                URLEncoder.encode(segment, "UTF-8").replace("+", "%20")
+            }
 
     private suspend fun resolveBearerToken(): String {
         val current = ensureFreshSession()

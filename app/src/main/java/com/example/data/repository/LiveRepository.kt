@@ -11,6 +11,7 @@ import com.example.data.remote.toObjectList
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 import java.util.UUID
@@ -60,23 +61,58 @@ class LiveRepository(
         val uid = requireUid()
         val streamId = UUID.randomUUID().toString().replace("-", "")
         val channelName = "vyora_${uid.take(8)}_${streamId.take(8)}"
-        val resolvedTitle = title.trim().ifBlank { "${host.displayName} LIVE" }.take(120)
-        supabase.insert(
-            "vyora_live_streams",
-            JSONObject().apply {
-                put("id", streamId)
-                put("host_id", uid)
-                put("host_username", host.username)
-                put("host_avatar_url", host.avatarUrl)
-                put("channel_name", channelName)
-                put("title", resolvedTitle)
-                put("is_active", true)
-                put("viewer_count", 1L)
-                put("likes_count", 0L)
+        val resolvedTitle = title.trim().ifBlank { "${host.displayName.ifBlank { host.username }} LIVE" }.take(120)
+
+        val rpcStream = runCatching {
+            val raw = supabase.rpc(
+                "vyora_start_live_stream",
+                JSONObject().put("p_title", resolvedTitle)
+            )
+            JSONArray(raw).toObjectList().firstOrNull()?.toLiveStream()
+        }.getOrNull()
+
+        if (rpcStream != null && rpcStream.id.isNotBlank()) {
+            supabase.notifyChange("live")
+            return@runCatching rpcStream
+        }
+
+        val payload = JSONObject().apply {
+            put("id", streamId)
+            put("host_id", uid)
+            put("host_username", host.username)
+            put("host_avatar_url", host.avatarUrl)
+            put("channel_name", channelName)
+            put("title", resolvedTitle)
+            put("is_active", true)
+            put("viewer_count", 1L)
+            put("likes_count", 0L)
+        }
+
+        val inserted = try {
+            supabase.insert("vyora_live_streams", payload)
+        } catch (err: Exception) {
+            if (err is CancellationException) throw err
+            val msg = err.message.orEmpty()
+            if (msg.contains("bigint", ignoreCase = true)) {
+                val withoutId = JSONObject(payload.toString()).apply { remove("id") }
+                try {
+                    supabase.insert("vyora_live_streams", withoutId)
+                } catch (retryErr: Exception) {
+                    if (retryErr is CancellationException) throw retryErr
+                    if (retryErr.message.orEmpty().contains("bigint", ignoreCase = true)) {
+                        throw IllegalStateException(
+                            "Database schema mismatch (bigint column on vyora_live_streams). Please run /supabase/schema.sql in Supabase SQL Editor."
+                        )
+                    }
+                    throw retryErr
+                }
+            } else {
+                throw err
             }
-        )
+        }
+
         supabase.notifyChange("live")
-        LiveStream(
+        inserted.toObjectList().firstOrNull()?.toLiveStream() ?: LiveStream(
             id = streamId,
             hostId = uid,
             hostUsername = host.username,

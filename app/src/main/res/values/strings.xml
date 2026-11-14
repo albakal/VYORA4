@@ -71,6 +71,8 @@
     <string name="studio_stop_rec">Finish</string>
     <string name="permission_camera_audio">Camera &amp; Microphone permissions are required to record videos or go live.</string>
     <string name="grant_permissions">Grant Permissions</string>
+    <string name="camera_initializing_hint">Camera is initializing or unavailable. You can pick a video from gallery.</string>
+    <string name="recording_failed_error">Recording failed (code %1$d). Please try again or pick from gallery.</string>
 
     <!-- Friends & Social -->
     <string name="friends_feed">Friends Feed</string>
@@ -96,10 +98,17 @@
     <string name="end_live_btn">End Broadcast</string>
     <string name="live_viewers">%1$d watching</string>
     <string name="agora_missing_warning">Deploy the Supabase Edge Function (get-agora-token) and set AGORA_APP_ID &amp; AGORA_APP_CERTIFICATE in Supabase Secrets for live video streaming. Live chat &amp; stats are active.</string>
+    <string name="live_preview_local_note">Local camera preview is active. Configure get-agora-token &amp; Agora Secrets in Supabase to broadcast to viewers.</string>
+    <string name="retry">Retry</string>
     <string name="no_live_streams">No active live streams right now.</string>
 
     <!-- Profile, Wallet & Admin -->
     <string name="edit_profile">Edit Profile</string>
+    <string name="change_profile_photo">Change Profile Photo</string>
+    <string name="photo_selected">New photo selected</string>
+    <string name="username_label">Username</string>
+    <string name="display_name_label">Display Name</string>
+    <string name="bio_label">Bio</string>
     <string name="wallet_earnings">Wallet &amp; Points</string>
     <string name="admin_dashboard">Admin Dashboard</string>
     <string name="notifications_title">Notifications</string>

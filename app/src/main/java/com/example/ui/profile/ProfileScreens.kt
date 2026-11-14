@@ -4,6 +4,8 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +23,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
@@ -30,11 +33,13 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,6 +51,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -61,12 +67,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.model.VideoPost
 import com.example.media.formatCompactCount
@@ -108,6 +118,13 @@ fun ProfileScreen(
     val followingIds by viewModel.followingIds.collectAsStateWithLifecycle()
     val bookmarkedIds by viewModel.bookmarkedIds.collectAsStateWithLifecycle()
     val feedState by viewModel.feedVideos.collectAsStateWithLifecycle()
+    val isUpdatingAvatar by viewModel.isUpdatingAvatar.collectAsStateWithLifecycle()
+
+    val quickAvatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            viewModel.updateProfileAvatar(uri)
+        }
+    }
 
     val profile = if (isOwnProfile) myProfile else activeUsers.firstOrNull { it.userId == targetUserId }
     val allVideos = (feedState as? UiState.Success)?.data ?: emptyList()
@@ -166,11 +183,58 @@ fun ProfileScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    VyoraAvatar(
-                        avatarUrl = profile?.avatarUrl.orEmpty(),
-                        name = profile?.displayName ?: "VYORA",
-                        size = 88.dp
-                    )
+                    Box(contentAlignment = Alignment.BottomEnd) {
+                        VyoraAvatar(
+                            avatarUrl = profile?.avatarUrl.orEmpty(),
+                            name = profile?.displayName ?: "VYORA",
+                            size = 92.dp,
+                            onClick = if (isOwnProfile && !isUpdatingAvatar) {
+                                {
+                                    quickAvatarPicker.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                }
+                            } else null
+                        )
+                        if (isOwnProfile) {
+                            IconButton(
+                                enabled = !isUpdatingAvatar,
+                                onClick = {
+                                    quickAvatarPicker.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("change_avatar_button")
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .border(2.dp, MaterialTheme.colorScheme.background, CircleShape)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        if (isUpdatingAvatar) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                color = Color.White,
+                                                strokeWidth = 2.dp
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Filled.PhotoCamera,
+                                                contentDescription = vString(R.string.change_profile_photo),
+                                                tint = Color.White,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = profile?.displayName ?: "Creator",
@@ -507,15 +571,75 @@ private fun EditProfileDialog(
         onDismissRequest = onDismiss,
         title = { Text(vString(R.string.edit_profile)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(onClick = {
-                    avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                }) {
-                    Text("Change Profile Photo")
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(contentAlignment = Alignment.BottomEnd) {
+                    if (pickedAvatarUri != null) {
+                        AsyncImage(
+                            model = pickedAvatarUri,
+                            contentDescription = vString(R.string.change_profile_photo),
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(80.dp)
+                                .clip(CircleShape)
+                                .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                                .clickable {
+                                    avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                }
+                        )
+                    } else {
+                        VyoraAvatar(
+                            avatarUrl = profile.avatarUrl,
+                            name = displayName.ifBlank { profile.username },
+                            size = 80.dp,
+                            onClick = {
+                                avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                        )
+                    }
                 }
-                OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text("Username") }, singleLine = true)
-                OutlinedTextField(value = displayName, onValueChange = { displayName = it }, label = { Text("Display Name") }, singleLine = true)
-                OutlinedTextField(value = bio, onValueChange = { bio = it }, label = { Text("Bio") }, maxLines = 3)
+                OutlinedButton(
+                    onClick = {
+                        avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                    modifier = Modifier.testTag("dialog_change_avatar_button")
+                ) {
+                    Icon(Icons.Filled.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        if (pickedAvatarUri != null) vString(R.string.photo_selected)
+                        else vString(R.string.change_profile_photo)
+                    )
+                }
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text(vString(R.string.username_label)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("edit_username_input")
+                )
+                OutlinedTextField(
+                    value = displayName,
+                    onValueChange = { displayName = it },
+                    label = { Text(vString(R.string.display_name_label)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("edit_display_name_input")
+                )
+                OutlinedTextField(
+                    value = bio,
+                    onValueChange = { bio = it },
+                    label = { Text(vString(R.string.bio_label)) },
+                    maxLines = 3,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("edit_bio_input")
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -527,7 +651,10 @@ private fun EditProfileDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onSave(username, displayName, bio, pickedAvatarUri, isPrivate) }) {
+            Button(
+                onClick = { onSave(username, displayName, bio, pickedAvatarUri, isPrivate) },
+                modifier = Modifier.testTag("save_profile_button")
+            ) {
                 Text(vString(R.string.save_changes))
             }
         },

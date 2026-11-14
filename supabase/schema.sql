@@ -28,6 +28,17 @@ CREATE TABLE IF NOT EXISTS public.vyora_profiles (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Safe migrations if vyora_profiles already existed from an earlier version
+ALTER TABLE public.vyora_profiles ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.vyora_profiles ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.vyora_profiles ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.vyora_profiles ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.vyora_profiles ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE public.vyora_profiles ADD COLUMN IF NOT EXISTS is_banned BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE public.vyora_profiles ADD COLUMN IF NOT EXISTS interests TEXT[] NOT NULL DEFAULT ARRAY['comedy', 'music', 'tech'];
+ALTER TABLE public.vyora_profiles ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT 'ar';
+ALTER TABLE public.vyora_profiles ADD COLUMN IF NOT EXISTS theme_mode TEXT NOT NULL DEFAULT 'dark';
+
 CREATE TABLE IF NOT EXISTS public.vyora_follows (
     id TEXT PRIMARY KEY,
     follower_id TEXT NOT NULL,
@@ -213,6 +224,19 @@ CREATE TABLE IF NOT EXISTS public.vyora_live_streams (
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     ended_at TIMESTAMPTZ
 );
+
+-- Safe migrations if vyora_live_streams already existed from an earlier version
+ALTER TABLE public.vyora_live_streams ADD COLUMN IF NOT EXISTS host_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.vyora_live_streams ADD COLUMN IF NOT EXISTS host_username TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.vyora_live_streams ADD COLUMN IF NOT EXISTS host_avatar_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.vyora_live_streams ADD COLUMN IF NOT EXISTS channel_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.vyora_live_streams ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT 'LIVE';
+ALTER TABLE public.vyora_live_streams ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE public.vyora_live_streams ADD COLUMN IF NOT EXISTS viewer_count BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE public.vyora_live_streams ADD COLUMN IF NOT EXISTS likes_count BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE public.vyora_live_streams ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE public.vyora_live_streams ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_vyora_live_active ON public.vyora_live_streams(is_active, viewer_count DESC);
 
 CREATE TABLE IF NOT EXISTS public.vyora_live_comments (
@@ -387,7 +411,7 @@ BEGIN
 
     INSERT INTO public.vyora_videos_ledger (
         video_id, creator_uid, creator_username, creator_avatar_url,
-        video_url, thumbnail_url, caption, hashtags, sound_id, sound_title, duration_sec
+        video_url, thumbnail_url, caption, hashtags, sound_id, sound_title, duration_sec, status
     )
     VALUES (
         v_video_id,
@@ -400,7 +424,8 @@ BEGIN
         COALESCE(p_hashtags, '{}'),
         COALESCE(p_sound_id, ''),
         LEFT(COALESCE(NULLIF(p_sound_title, ''), 'Original Sound'), 120),
-        LEAST(300, GREATEST(1, COALESCE(p_duration_sec, 15)))
+        LEAST(300, GREATEST(1, COALESCE(p_duration_sec, 15))),
+        'active'
     );
 
     IF p_hashtags IS NOT NULL THEN
@@ -1104,6 +1129,141 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.vyora_start_live_stream(
+    p_title TEXT DEFAULT ''
+)
+RETURNS SETOF public.vyora_live_streams
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_uid TEXT := auth.uid()::text;
+    v_profile public.vyora_profiles%ROWTYPE;
+    v_stream_id TEXT := REPLACE(gen_random_uuid()::text, '-', '');
+    v_channel_name TEXT;
+    v_title TEXT;
+BEGIN
+    IF v_uid IS NULL OR v_uid = '' THEN
+        RAISE EXCEPTION 'Authentication required';
+    END IF;
+
+    SELECT * INTO v_profile FROM public.vyora_profiles WHERE user_id = v_uid;
+    v_channel_name := 'vyora_' || LEFT(v_uid, 8) || '_' || LEFT(v_stream_id, 8);
+    v_title := LEFT(
+        COALESCE(
+            NULLIF(TRIM(p_title), ''),
+            NULLIF(TRIM(v_profile.display_name), '') || ' LIVE',
+            'VYORA LIVE'
+        ),
+        120
+    );
+
+    INSERT INTO public.vyora_live_streams (
+        id, host_id, host_username, host_avatar_url, channel_name, title, is_active, viewer_count, likes_count
+    )
+    VALUES (
+        v_stream_id,
+        v_uid,
+        COALESCE(NULLIF(v_profile.username, ''), 'creator_' || LEFT(v_uid, 6)),
+        COALESCE(v_profile.avatar_url, ''),
+        v_channel_name,
+        v_title,
+        TRUE,
+        1,
+        0
+    );
+
+    RETURN QUERY SELECT * FROM public.vyora_live_streams WHERE id = v_stream_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.vyora_update_avatar(
+    p_avatar_url TEXT
+)
+RETURNS SETOF public.vyora_profiles
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_uid TEXT := auth.uid()::text;
+    v_clean_url TEXT := LEFT(TRIM(COALESCE(p_avatar_url, '')), 1500);
+BEGIN
+    IF v_uid IS NULL OR v_uid = '' THEN
+        RAISE EXCEPTION 'Authentication required';
+    END IF;
+
+    UPDATE public.vyora_profiles
+    SET avatar_url = v_clean_url,
+        updated_at = NOW()
+    WHERE user_id = v_uid;
+
+    UPDATE public.vyora_videos_ledger
+    SET creator_avatar_url = v_clean_url,
+        updated_at = NOW()
+    WHERE creator_uid = v_uid;
+
+    UPDATE public.vyora_video_comments
+    SET avatar_url = v_clean_url
+    WHERE user_id = v_uid;
+
+    UPDATE public.vyora_live_streams
+    SET host_avatar_url = v_clean_url
+    WHERE host_id = v_uid;
+
+    RETURN QUERY SELECT * FROM public.vyora_profiles WHERE user_id = v_uid;
+END;
+$$;
+
+-- ============================================================================
+-- Automatic Repair: Convert Any Pre-Existing BIGINT / UUID ID Columns to TEXT
+-- (Prevents "invalid input syntax for type bigint" if tables were created via UI)
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_pol RECORD;
+    v_col RECORD;
+    v_is_identity TEXT;
+    v_col_default TEXT;
+BEGIN
+    -- Drop existing RLS policies on vyora_* tables temporarily so ALTER COLUMN TYPE succeeds cleanly
+    FOR v_pol IN
+        SELECT schemaname, tablename, policyname
+        FROM pg_policies
+        WHERE schemaname = 'public' AND tablename LIKE 'vyora\_%' ESCAPE '\'
+    LOOP
+        EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I', v_pol.policyname, v_pol.schemaname, v_pol.tablename);
+    END LOOP;
+
+    FOR v_col IN
+        SELECT table_name, column_name, data_type, is_identity, column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name LIKE 'vyora\_%' ESCAPE '\'
+          AND column_name IN (
+              'id', 'user_id', 'host_id', 'stream_id', 'video_id', 'creator_uid',
+              'sound_id', 'creator_id', 'follower_id', 'following_id', 'requester_id',
+              'target_id', 'last_sender_id', 'conversation_id', 'sender_id',
+              'recipient_id', 'actor_id', 'reporter_id', 'reviewed_by', 'assigned_by'
+          )
+          AND data_type IN ('bigint', 'integer', 'smallint', 'uuid')
+    LOOP
+        IF v_col.is_identity = 'YES' THEN
+            EXECUTE format('ALTER TABLE public.%I ALTER COLUMN %I DROP IDENTITY IF EXISTS', v_col.table_name, v_col.column_name);
+        END IF;
+        IF v_col.column_default IS NOT NULL AND v_col.column_default LIKE 'nextval%' THEN
+            EXECUTE format('ALTER TABLE public.%I ALTER COLUMN %I DROP DEFAULT', v_col.table_name, v_col.column_name);
+        END IF;
+        EXECUTE format(
+            'ALTER TABLE public.%I ALTER COLUMN %I TYPE TEXT USING %I::text',
+            v_col.table_name, v_col.column_name, v_col.column_name
+        );
+    END LOOP;
+END;
+$$;
+
 -- ============================================================================
 -- Row-Level Security (RLS) Policies
 -- ============================================================================
@@ -1137,7 +1297,7 @@ CREATE POLICY "Profiles readable by authenticated" ON public.vyora_profiles FOR 
 DROP POLICY IF EXISTS "Own profile insertable" ON public.vyora_profiles;
 CREATE POLICY "Own profile insertable" ON public.vyora_profiles FOR INSERT TO authenticated WITH CHECK (auth.uid()::text = user_id);
 DROP POLICY IF EXISTS "Own or admin profile updatable" ON public.vyora_profiles;
-CREATE POLICY "Own or admin profile updatable" ON public.vyora_profiles FOR UPDATE TO authenticated USING (auth.uid()::text = user_id OR public.vyora_is_admin());
+CREATE POLICY "Own or admin profile updatable" ON public.vyora_profiles FOR UPDATE TO authenticated USING (auth.uid()::text = user_id OR public.vyora_is_admin()) WITH CHECK (auth.uid()::text = user_id OR public.vyora_is_admin());
 
 -- Follows & Requests & Blocks
 DROP POLICY IF EXISTS "Follows readable" ON public.vyora_follows;
@@ -1152,6 +1312,8 @@ CREATE POLICY "Blocks owner write" ON public.vyora_blocks FOR ALL TO authenticat
 -- Videos & Engagement
 DROP POLICY IF EXISTS "Public active videos readable" ON public.vyora_videos_ledger;
 CREATE POLICY "Public active videos readable" ON public.vyora_videos_ledger FOR SELECT TO anon, authenticated USING (status = 'active' OR auth.uid()::text = creator_uid OR public.vyora_is_admin());
+DROP POLICY IF EXISTS "Creator insert own video" ON public.vyora_videos_ledger;
+CREATE POLICY "Creator insert own video" ON public.vyora_videos_ledger FOR INSERT TO authenticated WITH CHECK (auth.uid()::text = creator_uid);
 DROP POLICY IF EXISTS "Creator or admin video update" ON public.vyora_videos_ledger;
 CREATE POLICY "Creator or admin video update" ON public.vyora_videos_ledger FOR UPDATE TO authenticated USING (auth.uid()::text = creator_uid OR public.vyora_is_admin());
 DROP POLICY IF EXISTS "Creator or admin video delete" ON public.vyora_videos_ledger;
@@ -1233,19 +1395,28 @@ DROP POLICY IF EXISTS "Authenticated upload vyora-media" ON storage.objects;
 CREATE POLICY "Authenticated upload vyora-media"
     ON storage.objects FOR INSERT
     TO authenticated
-    WITH CHECK (bucket_id = 'vyora-media' AND (storage.foldername(name))[2] = auth.uid()::text);
+    WITH CHECK (
+        bucket_id = 'vyora-media'
+        AND ((storage.foldername(name))[2] = auth.uid()::text OR owner = auth.uid())
+    );
 
 DROP POLICY IF EXISTS "Authenticated update own vyora-media" ON storage.objects;
 CREATE POLICY "Authenticated update own vyora-media"
     ON storage.objects FOR UPDATE
     TO authenticated
-    USING (bucket_id = 'vyora-media' AND (storage.foldername(name))[2] = auth.uid()::text);
+    USING (
+        bucket_id = 'vyora-media'
+        AND ((storage.foldername(name))[2] = auth.uid()::text OR owner = auth.uid())
+    );
 
 DROP POLICY IF EXISTS "Authenticated delete own vyora-media" ON storage.objects;
 CREATE POLICY "Authenticated delete own vyora-media"
     ON storage.objects FOR DELETE
     TO authenticated
-    USING (bucket_id = 'vyora-media' AND (storage.foldername(name))[2] = auth.uid()::text);
+    USING (
+        bucket_id = 'vyora-media'
+        AND ((storage.foldername(name))[2] = auth.uid()::text OR owner = auth.uid())
+    );
 
 -- ============================================================================
 -- Schema Permissions & PostgREST Cache Reload

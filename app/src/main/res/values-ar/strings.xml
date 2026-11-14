@@ -71,6 +71,8 @@
     <string name="studio_stop_rec">إنهاء</string>
     <string name="permission_camera_audio">مطلوب إذن الكاميرا والميكروفون لتصوير الفيديو أو بدء البث المباشر.</string>
     <string name="grant_permissions">منح الأذونات</string>
+    <string name="camera_initializing_hint">الكاميرا قيد التهيئة أو غير متاحة. يمكنك اختيار فيديو من المعرض.</string>
+    <string name="recording_failed_error">تعذر تسجيل الفيديو (رمز %1$d). حاول مجدداً أو اختر من المعرض.</string>
 
     <!-- Friends & Social -->
     <string name="friends_feed">فيديوهات الأصدقاء</string>
@@ -96,10 +98,17 @@
     <string name="end_live_btn">إنهاء البث</string>
     <string name="live_viewers">%1$d مشاهد</string>
     <string name="agora_missing_warning">انشر دالة Supabase Edge Function (get-agora-token) واضبط مفاتيح AGORA في Supabase Secrets لتفعيل البث المرئي. دردشة البث وإحصائياته فعالة.</string>
+    <string name="live_preview_local_note">معاينة الكاميرا المحلية تعمل. فعّل دالة get-agora-token ومفاتيح Agora في Supabase للبث إلى المشاهدين.</string>
+    <string name="retry">إعادة المحاولة</string>
     <string name="no_live_streams">لا توجد جلسات بث مباشر حالياً.</string>
 
     <!-- Profile, Wallet & Admin -->
     <string name="edit_profile">تعديل الملف الشخصي</string>
+    <string name="change_profile_photo">تغيير الصورة الشخصية</string>
+    <string name="photo_selected">تم اختيار صورة جديدة</string>
+    <string name="username_label">اسم المستخدم</string>
+    <string name="display_name_label">الاسم الظاهر</string>
+    <string name="bio_label">النبذة التعريفية</string>
     <string name="wallet_earnings">المحفظة والنقاط</string>
     <string name="admin_dashboard">لوحة تحكم المدير</string>
     <string name="notifications_title">الإشعارات</string>

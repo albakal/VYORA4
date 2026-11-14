@@ -95,6 +95,9 @@ class VyoraAppViewModel(
     private val _ledgerSyncState = MutableStateFlow<LedgerSyncState>(LedgerSyncState.Checking)
     val ledgerSyncState: StateFlow<LedgerSyncState> = _ledgerSyncState.asStateFlow()
 
+    private val _isUpdatingAvatar = MutableStateFlow(false)
+    val isUpdatingAvatar: StateFlow<Boolean> = _isUpdatingAvatar.asStateFlow()
+
     private val _feedRefreshTrigger = MutableStateFlow(0)
 
     val currentUserProfile: StateFlow<UserProfile?> = userRepo.observeUser(currentUserId)
@@ -106,12 +109,7 @@ class VyoraAppViewModel(
 
     val feedVideos: StateFlow<UiState<List<VideoPost>>> = _feedRefreshTrigger
         .flatMapLatest {
-            videoRepo.observeActiveVideos()
-                .map<List<VideoPost>, UiState<List<VideoPost>>> { UiState.Success(it) }
-                .catch { e ->
-                    if (e is CancellationException) throw e
-                    emit(UiState.Error(e.localizedMessage ?: "Failed to load feed"))
-                }
+            videoRepo.observeActiveVideosState()
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
@@ -389,10 +387,12 @@ class VyoraAppViewModel(
                             durationSec = durationSec
                         ).onSuccess {
                             _toastMessage.value = "Video published!"
-                            refreshAccountingSync()
+                            retryFeed()
                             onPublished()
                         }.onFailure { e ->
-                            _uploadState.value = UploadStatus.Failed(e.localizedMessage ?: "Failed to save video")
+                            val msg = e.localizedMessage ?: "Failed to save video"
+                            _toastMessage.value = msg
+                            _uploadState.value = UploadStatus.Failed(msg)
                         }
                     }
                 }
@@ -419,6 +419,24 @@ class VyoraAppViewModel(
         }
     }
 
+    fun updateProfileAvatar(avatarUri: Uri) {
+        viewModelScope.launch {
+            _isUpdatingAvatar.value = true
+            val uploaded = storageRepo.uploadImage(currentUserId, "avatars", avatarUri)
+            if (uploaded.isFailure) {
+                _isUpdatingAvatar.value = false
+                _toastMessage.value = uploaded.exceptionOrNull()?.localizedMessage
+                    ?: "Failed to upload profile photo"
+                return@launch
+            }
+            val avatarUrl = uploaded.getOrThrow()
+            userRepo.updateAvatar(avatarUrl)
+                .onSuccess { _toastMessage.value = "Profile photo updated" }
+                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save profile photo" }
+            _isUpdatingAvatar.value = false
+        }
+    }
+
     fun updateProfile(
         username: String,
         displayName: String,
@@ -429,14 +447,23 @@ class VyoraAppViewModel(
         interests: List<String>? = null
     ) {
         viewModelScope.launch {
+            _isUpdatingAvatar.value = avatarUri != null
             val finalAvatar = if (avatarUri != null) {
-                storageRepo.uploadImage(currentUserId, "avatars", avatarUri).getOrDefault(currentAvatarUrl)
+                val uploaded = storageRepo.uploadImage(currentUserId, "avatars", avatarUri)
+                if (uploaded.isFailure) {
+                    _isUpdatingAvatar.value = false
+                    _toastMessage.value = uploaded.exceptionOrNull()?.localizedMessage
+                        ?: "Failed to upload profile photo"
+                    return@launch
+                }
+                uploaded.getOrThrow()
             } else {
                 currentAvatarUrl
             }
             userRepo.updateProfile(username, displayName, bio, finalAvatar, isPrivate, interests)
                 .onSuccess { _toastMessage.value = "Profile saved" }
-                .onFailure { _toastMessage.value = it.localizedMessage }
+                .onFailure { _toastMessage.value = it.localizedMessage ?: "Failed to save profile" }
+            _isUpdatingAvatar.value = false
         }
     }
 

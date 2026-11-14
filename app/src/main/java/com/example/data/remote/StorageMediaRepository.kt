@@ -2,6 +2,7 @@ package com.example.data.remote
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import kotlinx.coroutines.CancellationException
@@ -31,24 +32,34 @@ class StorageMediaRepository(
         val fileId = UUID.randomUUID().toString()
         emit(UploadStatus.Progress(10))
 
-        val videoBytes = withContext(Dispatchers.IO) { readUriBytes(context, videoUri) }
-        if (videoBytes == null || videoBytes.isEmpty()) {
+        val contentLength = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openAssetFileDescriptor(videoUri, "r")?.use { it.length } ?: -1L
+            }.getOrDefault(-1L)
+        }
+        val canRead = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(videoUri)?.use { it.available() >= 0 } ?: false
+            }.getOrDefault(false)
+        }
+        if (!canRead) {
             emit(UploadStatus.Failed("Unable to read selected video file"))
             return@flow
         }
 
         emit(UploadStatus.Progress(35))
         val videoUrl = try {
-            supabase.uploadStorageObject(
+            supabase.uploadStorageStream(
                 objectPath = "videos/$userId/$fileId.mp4",
-                bytes = videoBytes,
-                contentType = context.contentResolver.getType(videoUri) ?: "video/mp4"
+                contentLength = contentLength,
+                contentType = context.contentResolver.getType(videoUri) ?: "video/mp4",
+                openStream = { context.contentResolver.openInputStream(videoUri) }
             )
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             emit(
                 UploadStatus.Failed(
-                    e.localizedMessage ?: "Video upload failed (verify Supabase Storage bucket vyora-media)"
+                    e.localizedMessage ?: "Video upload failed (verify Supabase Storage bucket vyora-media & RLS policies)"
                 )
             )
             return@flow
@@ -81,13 +92,53 @@ class StorageMediaRepository(
 
     suspend fun uploadImage(userId: String, folder: String, uri: Uri): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            val bytes = readUriBytes(appContext, uri)
+            val bytes = encodeCompressedImageBytes(appContext, uri)
+                ?: readUriBytes(appContext, uri)
                 ?: throw IllegalStateException("Unable to read image file")
             supabase.uploadStorageObject(
                 objectPath = "$folder/$userId/${UUID.randomUUID()}.jpg",
                 bytes = bytes,
-                contentType = appContext.contentResolver.getType(uri) ?: "image/jpeg"
+                contentType = "image/jpeg"
             )
+        }
+    }
+
+    private fun encodeCompressedImageBytes(context: Context, uri: Uri, maxEdgePx: Int = 720): ByteArray? {
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, bounds)
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+            var sampleSize = 1
+            while ((bounds.outWidth / sampleSize) > maxEdgePx * 2 || (bounds.outHeight / sampleSize) > maxEdgePx * 2) {
+                sampleSize *= 2
+            }
+            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            val decoded = context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, decodeOpts)
+            } ?: return null
+
+            val maxDim = maxOf(decoded.width, decoded.height)
+            val scaled = if (maxDim > maxEdgePx) {
+                val ratio = maxEdgePx.toFloat() / maxDim.toFloat()
+                Bitmap.createScaledBitmap(
+                    decoded,
+                    (decoded.width * ratio).toInt().coerceAtLeast(1),
+                    (decoded.height * ratio).toInt().coerceAtLeast(1),
+                    true
+                )
+            } else {
+                decoded
+            }
+            val baos = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, 86, baos)
+            if (scaled !== decoded) scaled.recycle()
+            decoded.recycle()
+            baos.toByteArray()
+        } catch (_: Exception) {
+            null
         }
     }
 

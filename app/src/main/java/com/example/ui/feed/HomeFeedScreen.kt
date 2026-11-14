@@ -214,6 +214,7 @@ fun HomeFeedScreen(
 
                     VerticalPager(
                         state = pagerState,
+                        key = { pageIndex -> visibleVideos.getOrNull(pageIndex)?.id ?: pageIndex },
                         modifier = Modifier
                             .fillMaxSize()
                             .testTag("video_vertical_pager"),

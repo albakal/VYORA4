@@ -12,6 +12,7 @@ import com.example.data.remote.toObjectList
 import com.example.data.remote.toSoundTrack
 import com.example.data.remote.toVideoComment
 import com.example.data.remote.toVideoPost
+import com.example.ui.UiState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -26,6 +27,20 @@ class VideoRepository(
 
     private fun requireUid(): String =
         supabase.currentUser?.uid ?: throw IllegalStateException("User must be signed in.")
+
+    fun observeActiveVideosState(): Flow<UiState<List<VideoPost>>> =
+        supabase.observeTopic("videos").map {
+            runCatching {
+                val arr = supabase.select(
+                    "vyora_videos_ledger",
+                    "status=eq.active&order=created_at.desc&limit=60"
+                )
+                UiState.Success(arr.toObjectList().map { it.toVideoPost() }) as UiState<List<VideoPost>>
+            }.getOrElse { e ->
+                if (e is CancellationException) throw e
+                UiState.Error(e.localizedMessage ?: "Failed to load feed")
+            }
+        }
 
     fun observeActiveVideos(): Flow<List<VideoPost>> =
         supabase.observeTopic("videos").map {
@@ -132,6 +147,18 @@ class VideoRepository(
                 put("p_duration_sec", durationSec.coerceIn(1L, 300L))
             }
         ).trim().trim('"')
+        require(videoId.isNotBlank()) { "Server did not return a valid video ID" }
+
+        val verification = supabase.select(
+            "vyora_videos_ledger",
+            "video_id=eq.${SupabaseClient.urlEncode(videoId)}&status=eq.active&limit=1"
+        )
+        if (verification.length() == 0) {
+            throw IllegalStateException(
+                "Video was saved ($videoId) but is not visible via vyora_videos_ledger SELECT RLS policy. Re-run supabase/schema.sql."
+            )
+        }
+
         supabase.notifyChange("videos", "hashtags", "sounds")
         videoId
     }.onFailure { if (it is CancellationException) throw it }

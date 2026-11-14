@@ -148,7 +148,27 @@ class UserRepository(
             }
         }
         supabase.update("vyora_profiles", "user_id=eq.${SupabaseClient.urlEncode(uid)}", updates)
-        supabase.notifyChange("profiles")
+        runCatching {
+            supabase.rpc("vyora_update_avatar", JSONObject().put("p_avatar_url", avatarUrl.trim()))
+        }
+        supabase.notifyChange("profiles", "videos", "comments", "live")
+        Unit
+    }.onFailure { if (it is CancellationException) throw it }
+
+    suspend fun updateAvatar(avatarUrl: String): Result<Unit> = runCatching {
+        val uid = requireUid()
+        val cleanUrl = avatarUrl.trim()
+        val rpcSucceeded = runCatching {
+            supabase.rpc("vyora_update_avatar", JSONObject().put("p_avatar_url", cleanUrl))
+        }.isSuccess
+        if (!rpcSucceeded) {
+            supabase.update(
+                "vyora_profiles",
+                "user_id=eq.${SupabaseClient.urlEncode(uid)}",
+                JSONObject().put("avatar_url", cleanUrl)
+            )
+        }
+        supabase.notifyChange("profiles", "videos", "comments", "live")
         Unit
     }.onFailure { if (it is CancellationException) throw it }
 
